@@ -41,6 +41,28 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `get_character_attributes` | Character attributes (int/mem/per/will/cha) |
 | `check_skill_requirements` | Check if character meets skill reqs for a ship/module |
 
+### Market & Trading (ESI)
+
+| Tool | Description |
+|------|-------------|
+| `get_wallet_balance` | Character ISK balance |
+| `get_character_orders` | Open market orders with item names |
+| `get_order_history` | Completed/cancelled/expired orders |
+| `get_wallet_journal` | ISK income/expense log |
+| `get_wallet_transactions` | Recent market buys/sells with item names |
+| `get_market_prices` | Global average/adjusted prices (public) |
+| `get_region_orders` | Market orders for an item in a region (public) |
+| `get_market_history` | Daily price/volume history for an item (public) |
+
+### Industry & Assets (ESI)
+
+| Tool | Description |
+|------|-------------|
+| `get_industry_jobs` | Active/recent manufacturing, research, invention jobs |
+| `get_industry_cost_indices` | System cost indices for industry (public) |
+| `get_character_assets` | Items in hangars/containers with names |
+| `get_character_contracts` | Courier, item exchange, auction contracts |
+
 ## Setup
 
 Requires Node.js 20+.

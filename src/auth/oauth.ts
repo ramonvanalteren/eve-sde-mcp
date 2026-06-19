@@ -12,6 +12,12 @@ const CALLBACK_PATH = "/callback";
 const DEFAULT_SCOPES = [
   "esi-skills.read_skills.v1",
   "esi-skills.read_skillqueue.v1",
+  "esi-wallet.read_character_wallet.v1",
+  "esi-markets.read_character_orders.v1",
+  "esi-markets.structure_markets.v1",
+  "esi-industry.read_character_jobs.v1",
+  "esi-assets.read_assets.v1",
+  "esi-contracts.read_character_contracts.v1",
 ];
 
 export interface OAuthTokens {

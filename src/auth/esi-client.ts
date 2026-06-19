@@ -47,20 +47,23 @@ async function getValidToken(
   return { token: character.accessToken, character };
 }
 
-export async function esiGet<T>(path: string, opts?: EsiRequestOptions): Promise<T> {
-  const { token } = await getValidToken(opts?.characterId);
+export async function esiGet<T>(
+  esiPath: string,
+  opts?: EsiRequestOptions & { public?: boolean }
+): Promise<T> {
+  const url = `${ESI_BASE}${esiPath}`;
+  const headers: Record<string, string> = { Accept: "application/json" };
 
-  const url = `${ESI_BASE}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
-  });
+  if (!opts?.public) {
+    const { token } = await getValidToken(opts?.characterId);
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, { headers });
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`ESI ${path} failed (${response.status}): ${body}`);
+    throw new Error(`ESI ${esiPath} failed (${response.status}): ${body}`);
   }
 
   return (await response.json()) as T;
