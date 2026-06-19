@@ -1,10 +1,12 @@
 # eve-sde-mcp
 
-MCP server providing access to Eve Online's Static Data Export (SDE) — ship stats, module attributes, universe data, industry blueprints, and more.
+MCP server providing access to Eve Online's Static Data Export (SDE) and live character data via the ESI API — ship stats, module attributes, universe data, industry blueprints, character skills, and more.
 
-Powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLite conversion of CCP's SDE. All data is local, read-only, and requires no authentication.
+Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLite conversion of CCP's SDE. Live data uses EVE SSO OAuth with PKCE (no client secret needed).
 
 ## Tools
+
+### Static Data (SDE)
 
 | Tool | Description |
 |------|-------------|
@@ -25,6 +27,19 @@ Powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLite conversion of
 | `query_sde` | Raw read-only SQL against the SDE |
 | `get_sde_status` | SDE version, download date, table list |
 | `refresh_sde` | Download/update the SDE from Fuzzwork |
+
+### Live Character Data (ESI)
+
+| Tool | Description |
+|------|-------------|
+| `esi_login` | Start EVE SSO OAuth login flow |
+| `esi_status` | Show authenticated characters and token status |
+| `esi_logout` | Remove stored tokens for a character |
+| `esi_switch_character` | Switch active character for queries |
+| `get_character_skills` | All trained skills with SDE-enriched names and groups |
+| `get_skill_queue` | Current skill training queue |
+| `get_character_attributes` | Character attributes (int/mem/per/will/cha) |
+| `check_skill_requirements` | Check if character meets skill reqs for a ship/module |
 
 ## Setup
 
@@ -56,6 +71,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Restart Claude Desktop to connect.
 
+## ESI Authentication
+
+To use the live character data tools, you need an EVE SSO application:
+
+1. Register at https://developers.eveonline.com — create an app with "Authentication & API Access", callback URL `http://localhost:8085/callback`
+2. Create `~/.eve-sde/config.json`:
+   ```json
+   { "clientId": "your_client_id_here" }
+   ```
+3. Use the `esi_login` tool — it opens a browser for EVE SSO login and stores encrypted tokens locally
+
+Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Only read-only skill scopes are requested. Multi-character support is built in.
+
 ## Development
 
 ```bash
@@ -67,7 +95,10 @@ npm run build        # Compile TypeScript
 
 ## Data
 
-The SDE is stored at `~/.eve-sde/eve.db` (outside the repo). Use the `refresh_sde` tool to update it when CCP releases a new version. The `query_sde` tool allows arbitrary SELECT queries for anything the specific tools don't cover.
+- **SDE**: `~/.eve-sde/eve.db` — use `refresh_sde` to update
+- **Auth tokens**: `~/.eve-sde/auth.db` — encrypted, use `esi_logout` to remove
+- **Config**: `~/.eve-sde/config.json` — EVE SSO Client ID
+- The `query_sde` tool allows arbitrary SELECT queries for anything the specific tools don't cover
 
 ## License
 

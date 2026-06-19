@@ -7,6 +7,8 @@ import { registerGroupTools } from "./tools/groups.js";
 import { registerUniverseTools } from "./tools/universe.js";
 import { registerIndustryTools } from "./tools/industry.js";
 import { registerMetaTools } from "./tools/meta.js";
+import { registerAuthTools } from "./tools/auth.js";
+import { registerSkillTools } from "./tools/skills.js";
 import { sdeExists } from "./database.js";
 import { downloadSde } from "./downloader.js";
 
@@ -20,6 +22,8 @@ registerGroupTools(server);
 registerUniverseTools(server);
 registerIndustryTools(server);
 registerMetaTools(server);
+registerAuthTools(server);
+registerSkillTools(server);
 
 async function main(): Promise<void> {
   if (!sdeExists()) {
