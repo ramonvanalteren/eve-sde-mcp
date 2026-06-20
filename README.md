@@ -54,6 +54,15 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `get_region_orders` | Market orders for an item in a region (public) |
 | `get_market_history` | Daily price/volume history for an item (public) |
 
+### Fittings (ESI)
+
+| Tool | Description |
+|------|-------------|
+| `get_fittings` | All saved fittings with ship/module names from SDE |
+| `save_fitting` | Save a fitting from EFT format or structured input (write) |
+| `delete_fitting` | Delete a saved fitting by ID (write) |
+| `parse_eft` | Preview EFT parsing without saving — resolves names to IDs and slot flags |
+
 ### Industry & Assets (ESI)
 
 | Tool | Description |
@@ -104,7 +113,7 @@ To use the live character data tools, you need an EVE SSO application:
    ```
 3. Use the `esi_login` tool — it opens a browser for EVE SSO login and stores encrypted tokens locally
 
-Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Only read-only skill scopes are requested. Multi-character support is built in.
+Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Scopes include skill reading, wallet, market, industry, assets, contracts, and fittings (read+write). Multi-character support is built in.
 
 ## Development
 

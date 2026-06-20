@@ -18,6 +18,8 @@ const DEFAULT_SCOPES = [
   "esi-industry.read_character_jobs.v1",
   "esi-assets.read_assets.v1",
   "esi-contracts.read_character_contracts.v1",
+  "esi-fittings.read_fittings.v1",
+  "esi-fittings.write_fittings.v1",
 ];
 
 export interface OAuthTokens {
