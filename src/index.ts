@@ -12,6 +12,7 @@ import { registerSkillTools } from "./tools/skills.js";
 import { registerMarketTools } from "./tools/market.js";
 import { registerIndustryEsiTools } from "./tools/industry-esi.js";
 import { registerFittingTools } from "./tools/fittings.js";
+import { registerKillmailTools } from "./tools/killmails.js";
 import { sdeExists } from "./database.js";
 import { downloadSde } from "./downloader.js";
 
@@ -30,6 +31,7 @@ registerSkillTools(server);
 registerMarketTools(server);
 registerIndustryEsiTools(server);
 registerFittingTools(server);
+registerKillmailTools(server);
 
 async function main(): Promise<void> {
   if (!sdeExists()) {

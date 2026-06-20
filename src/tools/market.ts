@@ -381,4 +381,93 @@ export function registerMarketTools(server: McpServer): void {
       };
     }
   );
+
+  server.tool(
+    "get_structure_orders",
+    "Get market orders in a player-owned structure (citadel, engineering complex, etc.). Requires esi-markets.structure_markets.v1 scope and docking access.",
+    {
+      structure_id: z.number().describe("Structure ID (64-bit). Find from assets or in-game."),
+      type_id: z.number().optional().describe("Filter to a specific type ID"),
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+    },
+    async ({ structure_id, type_id, character_id }) => {
+      const char = await getActiveCharacter(character_id);
+      const orders = await esiGet<EsiOrder[]>(
+        `/markets/structures/${structure_id}/`,
+        { characterId: char.characterId }
+      );
+
+      const db = getDatabase();
+      let filtered = orders;
+      if (type_id) {
+        filtered = orders.filter((o) => o.type_id === type_id);
+      }
+
+      const enriched = filtered.map((o) => ({
+        orderId: o.order_id,
+        typeName: enrichTypeName(db, o.type_id),
+        typeId: o.type_id,
+        isBuyOrder: o.is_buy_order,
+        price: o.price,
+        volumeRemain: o.volume_remain,
+        volumeTotal: o.volume_total,
+        issued: o.issued,
+        duration: o.duration,
+        minVolume: o.min_volume,
+        range: o.range,
+      }));
+
+      const buyOrders = enriched.filter((o) => o.isBuyOrder).sort((a, b) => b.price - a.price);
+      const sellOrders = enriched.filter((o) => !o.isBuyOrder).sort((a, b) => a.price - b.price);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                characterName: char.characterName,
+                structureId: structure_id,
+                totalOrders: enriched.length,
+                buyOrders: buyOrders.length,
+                sellOrders: sellOrders.length,
+                bestBuy: buyOrders[0]?.price ?? null,
+                bestSell: sellOrders[0]?.price ?? null,
+                orders: enriched,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_market_types",
+    "List all type IDs with active market orders in a region (public). Useful for finding what's traded in a region.",
+    {
+      region_id: z.number().describe("Region ID (10000002 = The Forge/Jita)"),
+    },
+    async ({ region_id }) => {
+      const typeIds = await esiGet<number[]>(
+        `/markets/${region_id}/types/`,
+        { public: true }
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { regionId: region_id, typeCount: typeIds.length, typeIds },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
 }

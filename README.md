@@ -53,6 +53,15 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `get_market_prices` | Global average/adjusted prices (public) |
 | `get_region_orders` | Market orders for an item in a region (public) |
 | `get_market_history` | Daily price/volume history for an item (public) |
+| `get_structure_orders` | Orders in a player-owned structure (authenticated) |
+| `get_market_types` | List type IDs with active orders in a region (public) |
+
+### Killmails (ESI)
+
+| Tool | Description |
+|------|-------------|
+| `get_recent_killmails` | Character's recent kills and losses (IDs + hashes) |
+| `get_killmail` | Full killmail detail with victim fitting, attackers, SDE names (public) |
 
 ### Fittings (ESI)
 
