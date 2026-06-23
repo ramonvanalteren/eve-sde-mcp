@@ -13,7 +13,8 @@ import { registerMarketTools } from "./tools/market.js";
 import { registerIndustryEsiTools } from "./tools/industry-esi.js";
 import { registerFittingTools } from "./tools/fittings.js";
 import { registerKillmailTools } from "./tools/killmails.js";
-import { sdeExists } from "./database.js";
+import { sdeExists, closeDatabase } from "./database.js";
+import { closeAuthDb } from "./auth/tokens.js";
 import { downloadSde } from "./downloader.js";
 
 const server = new McpServer({
@@ -32,6 +33,20 @@ registerMarketTools(server);
 registerIndustryEsiTools(server);
 registerFittingTools(server);
 registerKillmailTools(server);
+
+function shutdown(): void {
+  closeDatabase();
+  closeAuthDb();
+}
+
+process.on("SIGINT", () => {
+  shutdown();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  shutdown();
+  process.exit(0);
+});
 
 async function main(): Promise<void> {
   if (!sdeExists()) {
@@ -52,5 +67,6 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   process.stderr.write(`Fatal error: ${err}\n`);
+  shutdown();
   process.exit(1);
 });

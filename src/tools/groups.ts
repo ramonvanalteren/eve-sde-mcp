@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
+import { likeContains } from "../utils.js";
 
 export function registerGroupTools(server: McpServer): void {
   server.tool(
@@ -30,9 +31,9 @@ export function registerGroupTools(server: McpServer): void {
             `SELECT g.*, c.categoryName
              FROM invGroups g
              JOIN invCategories c ON g.categoryID = c.categoryID
-             WHERE g.groupName LIKE ?`
+             WHERE g.groupName LIKE ? ESCAPE '\\'`
           )
-          .get(`%${name}%`);
+          .get(likeContains(name));
       } else {
         return { content: [{ type: "text", text: "Provide either group_id or name." }] };
       }
@@ -77,8 +78,8 @@ export function registerGroupTools(server: McpServer): void {
         category = db.prepare("SELECT * FROM invCategories WHERE categoryID = ?").get(category_id);
       } else if (name) {
         category = db
-          .prepare("SELECT * FROM invCategories WHERE categoryName LIKE ?")
-          .get(`%${name}%`);
+          .prepare("SELECT * FROM invCategories WHERE categoryName LIKE ? ESCAPE '\\'")
+          .get(likeContains(name));
       } else {
         return { content: [{ type: "text", text: "Provide either category_id or name." }] };
       }

@@ -37,7 +37,19 @@ export function getDatabase(): Database.Database {
       `SDE database not found at ${DB_PATH}. Use the refresh_sde tool to download it.`
     );
   }
-  db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  try {
+    db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("NODE_MODULE_VERSION")) {
+      throw new Error(
+        `better-sqlite3 was compiled for a different Node.js version.\n` +
+        `Run: npm rebuild better-sqlite3\n` +
+        `If using nvm, make sure to run it with the same Node version you'll use to start the server.`
+      );
+    }
+    throw err;
+  }
   return db;
 }
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
+import { likeContains } from "../utils.js";
 
 export function registerTypeTools(server: McpServer): void {
   server.tool(
@@ -30,20 +31,20 @@ export function registerTypeTools(server: McpServer): void {
         FROM invTypes t
         JOIN invGroups g ON t.groupID = g.groupID
         JOIN invCategories c ON g.categoryID = c.categoryID
-        WHERE t.typeName LIKE ?
+        WHERE t.typeName LIKE ? ESCAPE '\\'
       `;
-      const params: unknown[] = [`%${query}%`];
+      const params: unknown[] = [likeContains(query)];
 
       if (published_only) {
         sql += " AND t.published = 1";
       }
       if (category) {
-        sql += " AND c.categoryName LIKE ?";
-        params.push(`%${category}%`);
+        sql += " AND c.categoryName LIKE ? ESCAPE '\\'";
+        params.push(likeContains(category));
       }
       if (group) {
-        sql += " AND g.groupName LIKE ?";
-        params.push(`%${group}%`);
+        sql += " AND g.groupName LIKE ? ESCAPE '\\'";
+        params.push(likeContains(group));
       }
       sql += " ORDER BY t.typeName LIMIT ?";
       params.push(limit);
@@ -141,8 +142,8 @@ export function registerTypeTools(server: McpServer): void {
       const params: unknown[] = [type_id];
 
       if (filter) {
-        sql += " AND (a.attributeName LIKE ? OR a.displayName LIKE ?)";
-        params.push(`%${filter}%`, `%${filter}%`);
+        sql += " AND (a.attributeName LIKE ? ESCAPE '\\' OR a.displayName LIKE ? ESCAPE '\\')";
+        params.push(likeContains(filter), likeContains(filter));
       }
       sql += " ORDER BY a.categoryID, a.attributeName";
 

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import http from "http";
 import { URL } from "url";
+import { escapeHtml } from "../utils.js";
 
 const EVE_SSO_BASE = "https://login.eveonline.com";
 const EVE_AUTHORIZE_URL = `${EVE_SSO_BASE}/v2/oauth/authorize`;
@@ -8,6 +9,7 @@ const EVE_TOKEN_URL = `${EVE_SSO_BASE}/v2/oauth/token`;
 
 const CALLBACK_PORT = 8085;
 const CALLBACK_PATH = "/callback";
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 const DEFAULT_SCOPES = [
   "esi-skills.read_skills.v1",
@@ -50,53 +52,6 @@ function generatePKCE(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-export async function startOAuthFlow(clientId: string, scopes?: string[]): Promise<AuthResult> {
-  const { verifier, challenge } = generatePKCE();
-  const state = crypto.randomBytes(16).toString("hex");
-  const redirectUri = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
-  const selectedScopes = scopes ?? DEFAULT_SCOPES;
-
-  const params = new URLSearchParams({
-    response_type: "code",
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    scope: selectedScopes.join(" "),
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-  });
-
-  const authUrl = `${EVE_AUTHORIZE_URL}?${params.toString()}`;
-
-  const code = await waitForCallback(state);
-  const tokens = await exchangeCode(code, clientId, redirectUri, verifier);
-  const character = decodeCharacterFromJwt(tokens.accessToken);
-
-  return {
-    tokens,
-    character: { ...character, scopes: selectedScopes.join(" ") },
-  };
-}
-
-export function getAuthUrl(clientId: string, scopes?: string[]): string {
-  const { challenge } = generatePKCE();
-  const state = crypto.randomBytes(16).toString("hex");
-  const redirectUri = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
-  const selectedScopes = scopes ?? DEFAULT_SCOPES;
-
-  const params = new URLSearchParams({
-    response_type: "code",
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    scope: selectedScopes.join(" "),
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-  });
-
-  return `${EVE_AUTHORIZE_URL}?${params.toString()}`;
-}
-
 let pendingFlow: {
   verifier: string;
   state: string;
@@ -104,13 +59,18 @@ let pendingFlow: {
   resolve: (result: AuthResult) => void;
   reject: (err: Error) => void;
   server: http.Server;
+  timeout: ReturnType<typeof setTimeout>;
 } | null = null;
+
+let pendingPromise: Promise<AuthResult> | null = null;
 
 export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: string } {
   if (pendingFlow) {
+    clearTimeout(pendingFlow.timeout);
     pendingFlow.server.close();
     pendingFlow.reject(new Error("Login flow superseded by new login attempt"));
     pendingFlow = null;
+    pendingPromise = null;
   }
 
   const { verifier, challenge } = generatePKCE();
@@ -130,7 +90,7 @@ export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: 
 
   const authUrl = `${EVE_AUTHORIZE_URL}?${params.toString()}`;
 
-  const resultPromise = new Promise<AuthResult>((resolve, reject) => {
+  pendingPromise = new Promise<AuthResult>((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       if (!req.url?.startsWith(CALLBACK_PATH)) {
         res.writeHead(404);
@@ -144,29 +104,26 @@ export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: 
       const error = url.searchParams.get("error");
 
       if (error) {
-        res.writeHead(400);
-        res.end(`<h1>Authentication Failed</h1><p>${error}</p>`);
+        res.writeHead(400, { "Content-Type": "text/html" });
+        res.end(`<h1>Authentication Failed</h1><p>${escapeHtml(error)}</p>`);
         reject(new Error(`OAuth error: ${error}`));
-        server.close();
-        pendingFlow = null;
+        cleanup();
         return;
       }
 
       if (returnedState !== state) {
-        res.writeHead(400);
+        res.writeHead(400, { "Content-Type": "text/html" });
         res.end("<h1>Authentication Failed</h1><p>Invalid state parameter</p>");
         reject(new Error("Invalid state — possible CSRF"));
-        server.close();
-        pendingFlow = null;
+        cleanup();
         return;
       }
 
       if (!code) {
-        res.writeHead(400);
+        res.writeHead(400, { "Content-Type": "text/html" });
         res.end("<h1>Authentication Failed</h1><p>No authorization code</p>");
         reject(new Error("No authorization code received"));
-        server.close();
-        pendingFlow = null;
+        cleanup();
         return;
       }
 
@@ -175,21 +132,32 @@ export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: 
         const character = decodeCharacterFromJwt(tokens.accessToken);
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(
-          `<h1>Authentication Successful!</h1><p>Logged in as <strong>${character.characterName}</strong>. You can close this tab.</p>`
+          `<h1>Authentication Successful!</h1><p>Logged in as <strong>${escapeHtml(character.characterName)}</strong>. You can close this tab.</p>`
         );
         resolve({
           tokens,
           character: { ...character, scopes: selectedScopes.join(" ") },
         });
       } catch (err) {
-        res.writeHead(500);
+        res.writeHead(500, { "Content-Type": "text/html" });
         res.end("<h1>Authentication Failed</h1><p>Token exchange error</p>");
         reject(err instanceof Error ? err : new Error(String(err)));
       } finally {
-        server.close();
-        pendingFlow = null;
+        cleanup();
       }
     });
+
+    const timeout = setTimeout(() => {
+      reject(new Error("Login timed out after 5 minutes. Start a new login with esi_login."));
+      cleanup();
+    }, LOGIN_TIMEOUT_MS);
+
+    function cleanup(): void {
+      clearTimeout(timeout);
+      server.close();
+      pendingFlow = null;
+      pendingPromise = null;
+    }
 
     server.listen(CALLBACK_PORT, () => {
       process.stderr.write(
@@ -204,78 +172,20 @@ export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: 
         reject(err);
       }
       pendingFlow = null;
+      pendingPromise = null;
     });
 
-    pendingFlow = { verifier, state, clientId, resolve, reject, server };
+    pendingFlow = { verifier, state, clientId, resolve, reject, server, timeout };
   });
-
-  // Store the promise so waitForLogin can await it
-  (startLoginFlow as any)._pending = resultPromise;
 
   return { authUrl };
 }
 
 export async function waitForLogin(): Promise<AuthResult> {
-  const promise = (startLoginFlow as any)._pending as Promise<AuthResult> | undefined;
-  if (!promise) {
+  if (!pendingPromise) {
     throw new Error("No login flow in progress. Call esi_login first.");
   }
-  return promise;
-}
-
-async function waitForCallback(expectedState: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      if (!req.url?.startsWith(CALLBACK_PATH)) {
-        res.writeHead(404);
-        res.end("Not found");
-        return;
-      }
-
-      const url = new URL(req.url, `http://localhost:${CALLBACK_PORT}`);
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-      const error = url.searchParams.get("error");
-
-      if (error) {
-        res.writeHead(400);
-        res.end(`<h1>Authentication Failed</h1><p>${error}</p>`);
-        reject(new Error(`OAuth error: ${error}`));
-        server.close();
-        return;
-      }
-
-      if (state !== expectedState) {
-        res.writeHead(400);
-        res.end("<h1>Invalid state</h1>");
-        reject(new Error("Invalid state — possible CSRF"));
-        server.close();
-        return;
-      }
-
-      if (!code) {
-        res.writeHead(400);
-        res.end("<h1>No code</h1>");
-        reject(new Error("No authorization code"));
-        server.close();
-        return;
-      }
-
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end("<h1>Success!</h1><p>You can close this tab.</p>");
-      resolve(code);
-      server.close();
-    });
-
-    server.listen(CALLBACK_PORT);
-    server.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        reject(new Error(`Port ${CALLBACK_PORT} is already in use`));
-      } else {
-        reject(err);
-      }
-    });
-  });
+  return pendingPromise;
 }
 
 async function exchangeCode(
@@ -361,7 +271,6 @@ function decodeCharacterFromJwt(accessToken: string): {
 
   const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
 
-  // EVE SSO JWT sub format: "CHARACTER:EVE:<character_id>"
   const sub = payload.sub as string;
   const match = sub.match(/CHARACTER:EVE:(\d+)/);
   if (!match) throw new Error(`Unexpected JWT sub format: ${sub}`);

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { esiGetAll, esiPost, esiDelete, getActiveCharacter } from "../auth/esi-client.js";
+import { enrichTypeName } from "../utils.js";
 
-// ESI slot effect IDs from dgmEffects
 const SLOT_EFFECT_IDS: Record<number, string> = {
   12: "hi",
   13: "med",
@@ -31,21 +31,12 @@ interface FittingItem {
   quantity: number;
 }
 
-function enrichTypeName(db: ReturnType<typeof getDatabase>, typeId: number): string {
-  const row = db.prepare("SELECT typeName FROM invTypes WHERE typeID = ?").get(typeId) as
-    | { typeName: string }
-    | undefined;
-  return row?.typeName ?? `Unknown(${typeId})`;
-}
-
 function resolveTypeId(db: ReturnType<typeof getDatabase>, name: string): number | null {
   const trimmed = name.trim();
-  // Exact match first
   let row = db
     .prepare("SELECT typeID FROM invTypes WHERE typeName = ? AND published = 1")
     .get(trimmed) as { typeID: number } | undefined;
   if (row) return row.typeID;
-  // Case-insensitive
   row = db
     .prepare("SELECT typeID FROM invTypes WHERE typeName = ? COLLATE NOCASE AND published = 1")
     .get(trimmed) as { typeID: number } | undefined;
@@ -62,7 +53,6 @@ function getSlotType(db: ReturnType<typeof getDatabase>, typeId: number): string
     if (SLOT_EFFECT_IDS[e.effectID]) return SLOT_EFFECT_IDS[e.effectID];
   }
 
-  // Check if it's a drone, charge, or fighter by category
   const cat = db
     .prepare(
       `SELECT c.categoryName FROM invTypes t
@@ -89,12 +79,11 @@ interface ParsedEft {
   errors: string[];
 }
 
-function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): ParsedEft {
+export function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): ParsedEft {
   const lines = eft.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
   const errors: string[] = [];
   const items: FittingItem[] = [];
 
-  // First line: [Ship Name, Fit Name]
   const headerMatch = lines[0]?.match(/^\[(.+?),\s*(.+)\]$/);
   if (!headerMatch) {
     return { shipName: "", shipTypeId: 0, fitName: "", items: [], errors: ["Invalid EFT header. Expected: [Ship Name, Fit Name]"] };
@@ -107,7 +96,6 @@ function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): Parsed
     return { shipName, shipTypeId: 0, fitName, items: [], errors: [`Ship "${shipName}" not found in SDE`] };
   }
 
-  // Track slot counters
   const slotCounters: Record<string, number> = { hi: 0, med: 0, lo: 0, rig: 0, sub: 0, service: 0 };
   const FLAG_PREFIX: Record<string, string> = {
     hi: "HiSlot",
@@ -121,22 +109,33 @@ function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): Parsed
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
 
-    // Empty lines (after filtering) or section dividers
     if (line === "" || line === "---") {
       continue;
     }
 
-    // Detect section changes from blank lines in original
-    // EFT format: hi slots, then blank, med slots, blank, lo slots, blank, rig slots, blank, drones, blank, cargo
-    // We detect drones/cargo by category rather than position
+    if (line.startsWith("[Empty")) continue;
 
-    // Parse "Item Name x2" or "Item Name" format
-    const quantityMatch = line.match(/^(.+?)\s+x(\d+)$/);
-    const itemName = quantityMatch ? quantityMatch[1].trim() : line;
+    // EFT format: "Module Name, Loaded Charge" or "Item Name x2" or just "Item Name"
+    const commaIdx = line.indexOf(",");
+    let modulePart = line;
+    let chargePart: string | null = null;
+
+    if (commaIdx !== -1) {
+      const beforeComma = line.substring(0, commaIdx).trim();
+      const afterComma = line.substring(commaIdx + 1).trim();
+      // Only treat as module+charge if both parts resolve to valid types
+      // (avoids splitting item names that contain commas, though rare in EVE)
+      const beforeId = resolveTypeId(db, beforeComma);
+      if (beforeId && afterComma.length > 0) {
+        modulePart = beforeComma;
+        chargePart = afterComma;
+      }
+    }
+
+    // Parse "Item Name x2" quantity suffix
+    const quantityMatch = modulePart.match(/^(.+?)\s+x(\d+)$/);
+    const itemName = quantityMatch ? quantityMatch[1].trim() : modulePart;
     const quantity = quantityMatch ? parseInt(quantityMatch[2], 10) : 1;
-
-    // Skip "[Empty ...]" slots
-    if (itemName.startsWith("[Empty")) continue;
 
     const typeId = resolveTypeId(db, itemName);
     if (!typeId) {
@@ -163,6 +162,20 @@ function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): Parsed
       items.push({ type_id: typeId, flag: `${prefix}${idx}`, quantity });
       slotCounters[slotType]!++;
     }
+
+    // Handle loaded charge as a cargo item
+    if (chargePart) {
+      const chargeQuantityMatch = chargePart.match(/^(.+?)\s+x(\d+)$/);
+      const chargeName = chargeQuantityMatch ? chargeQuantityMatch[1].trim() : chargePart;
+      const chargeQty = chargeQuantityMatch ? parseInt(chargeQuantityMatch[2], 10) : 1;
+
+      const chargeTypeId = resolveTypeId(db, chargeName);
+      if (chargeTypeId) {
+        items.push({ type_id: chargeTypeId, flag: "Cargo", quantity: chargeQty });
+      } else {
+        errors.push(`Charge "${chargeName}" not found in SDE`);
+      }
+    }
   }
 
   return { shipName, shipTypeId, fitName, items, errors };
@@ -178,7 +191,7 @@ export function registerFittingTools(server: McpServer): void {
     },
     async ({ character_id, ship_name }) => {
       const char = await getActiveCharacter(character_id);
-      const fittings = await esiGet<EsiFitting[]>(
+      const fittings = await esiGetAll<EsiFitting>(
         `/characters/${char.characterId}/fittings/`,
         { characterId: char.characterId }
       );
@@ -269,10 +282,7 @@ export function registerFittingTools(server: McpServer): void {
         fitItems = parsed.items;
 
         if (parsed.errors.length > 0) {
-          // Partial parse — warn but continue
-          const warningText = `Warnings (some items skipped):\n${parsed.errors.join("\n")}\n\n`;
-          // Continue with successfully parsed items
-          process.stderr.write(warningText);
+          process.stderr.write(`Warnings (some items skipped):\n${parsed.errors.join("\n")}\n\n`);
         }
       } else {
         if (!name || !ship_type_id || !items || items.length === 0) {
@@ -299,32 +309,12 @@ export function registerFittingTools(server: McpServer): void {
         items: fitItems,
       };
 
-      // POST to ESI
-      const url = `https://esi.evetech.net/latest/characters/${char.characterId}/fittings/`;
-      const { token } = await getValidTokenForPost(char.characterId);
+      const result = await esiPost<{ fitting_id: number }>(
+        `/characters/${char.characterId}/fittings/`,
+        body,
+        { characterId: char.characterId }
+      );
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errBody = await response.text();
-        return {
-          content: [
-            { type: "text", text: `Failed to save fitting (${response.status}): ${errBody}` },
-          ],
-        };
-      }
-
-      const result = (await response.json()) as { fitting_id: number };
-
-      // Build a summary of what was saved
       const itemSummary = fitItems.map((item) => ({
         name: enrichTypeName(db, item.type_id),
         flag: item.flag,
@@ -363,25 +353,11 @@ export function registerFittingTools(server: McpServer): void {
     },
     async ({ fitting_id, character_id }) => {
       const char = await getActiveCharacter(character_id);
-      const { token } = await getValidTokenForPost(char.characterId);
 
-      const url = `https://esi.evetech.net/latest/characters/${char.characterId}/fittings/${fitting_id}/`;
-      const response = await fetch(url, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        const errBody = await response.text();
-        return {
-          content: [
-            { type: "text", text: `Failed to delete fitting (${response.status}): ${errBody}` },
-          ],
-        };
-      }
+      await esiDelete(
+        `/characters/${char.characterId}/fittings/${fitting_id}/`,
+        { characterId: char.characterId }
+      );
 
       return {
         content: [
@@ -433,31 +409,4 @@ export function registerFittingTools(server: McpServer): void {
       };
     }
   );
-}
-
-// Helper to get a valid token for POST/DELETE operations
-import { refreshAccessToken } from "../auth/oauth.js";
-import { getCurrentCharacter, updateTokens, getTokens } from "../auth/tokens.js";
-import { readClientId } from "../auth/esi-client.js";
-
-async function getValidTokenForPost(
-  characterId: number
-): Promise<{ token: string }> {
-  let character = getTokens(characterId);
-  if (!character) {
-    character = getCurrentCharacter();
-  }
-  if (!character) {
-    throw new Error("No authenticated character. Use esi_login first.");
-  }
-
-  const fiveMinutes = 5 * 60 * 1000;
-  if (character.expiresAt.getTime() - Date.now() < fiveMinutes) {
-    const clientId = readClientId();
-    const newTokens = await refreshAccessToken(character.refreshToken, clientId);
-    updateTokens(character.characterId, newTokens);
-    character = getTokens(character.characterId)!;
-  }
-
-  return { token: character.accessToken };
 }

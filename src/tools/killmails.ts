@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { enrichTypeName, enrichSystemName } from "../utils.js";
 
 interface EsiKillmailRef {
   killmail_id: number;
@@ -43,7 +44,6 @@ interface EsiKillmailDetail {
   }>;
 }
 
-// ESI inventory flag IDs to human-readable slot names
 const FLAG_NAMES: Record<number, string> = {
   5: "Cargo",
   11: "LoSlot0", 12: "LoSlot1", 13: "LoSlot2", 14: "LoSlot3",
@@ -59,19 +59,9 @@ const FLAG_NAMES: Record<number, string> = {
   164: "Implant",
 };
 
-function enrichTypeName(db: ReturnType<typeof getDatabase>, typeId: number | undefined): string | undefined {
+function enrichTypeNameOptional(db: ReturnType<typeof getDatabase>, typeId: number | undefined): string | undefined {
   if (!typeId) return undefined;
-  const row = db.prepare("SELECT typeName FROM invTypes WHERE typeID = ?").get(typeId) as
-    | { typeName: string }
-    | undefined;
-  return row?.typeName ?? `Unknown(${typeId})`;
-}
-
-function enrichSystemName(db: ReturnType<typeof getDatabase>, systemId: number): string {
-  const row = db.prepare("SELECT solarSystemName FROM mapSolarSystems WHERE solarSystemID = ?").get(systemId) as
-    | { solarSystemName: string }
-    | undefined;
-  return row?.solarSystemName ?? `Unknown(${systemId})`;
+  return enrichTypeName(db, typeId);
 }
 
 export function registerKillmailTools(server: McpServer): void {
@@ -130,7 +120,6 @@ export function registerKillmailTools(server: McpServer): void {
         quantityDropped: item.quantity_dropped ?? 0,
       }));
 
-      // Group items by slot category for fitting reconstruction
       const fitted: Record<string, typeof victimItems> = {};
       for (const item of victimItems) {
         const category = item.slot.replace(/\d+$/, "");
@@ -139,9 +128,9 @@ export function registerKillmailTools(server: McpServer): void {
       }
 
       const enrichedAttackers = km.attackers.map((a) => ({
-        shipName: enrichTypeName(db, a.ship_type_id),
+        shipName: enrichTypeNameOptional(db, a.ship_type_id),
         shipTypeId: a.ship_type_id,
-        weaponName: enrichTypeName(db, a.weapon_type_id),
+        weaponName: enrichTypeNameOptional(db, a.weapon_type_id),
         weaponTypeId: a.weapon_type_id,
         damageDone: a.damage_done,
         finalBlow: a.final_blow,

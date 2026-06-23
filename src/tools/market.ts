@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { esiGet, esiGetAll, getActiveCharacter } from "../auth/esi-client.js";
+import { enrichTypeName } from "../utils.js";
 
 interface EsiOrder {
   order_id: number;
@@ -47,12 +48,7 @@ interface EsiTransaction {
   journal_ref_id: number;
 }
 
-function enrichTypeName(db: ReturnType<typeof getDatabase>, typeId: number): string {
-  const row = db.prepare("SELECT typeName FROM invTypes WHERE typeID = ?").get(typeId) as
-    | { typeName: string }
-    | undefined;
-  return row?.typeName ?? `Unknown(${typeId})`;
-}
+const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
 
 export function registerMarketTools(server: McpServer): void {
   server.tool(
@@ -148,7 +144,7 @@ export function registerMarketTools(server: McpServer): void {
     },
     async ({ character_id }) => {
       const char = await getActiveCharacter(character_id);
-      const orders = await esiGet<(EsiOrder & { state: string })[]>(
+      const orders = await esiGetAll<EsiOrder & { state: string }>(
         `/characters/${char.characterId}/orders/history/`,
         { characterId: char.characterId }
       );
@@ -189,7 +185,7 @@ export function registerMarketTools(server: McpServer): void {
     },
     async ({ character_id }) => {
       const char = await getActiveCharacter(character_id);
-      const journal = await esiGet<EsiWalletJournalEntry[]>(
+      const journal = await esiGetAll<EsiWalletJournalEntry>(
         `/characters/${char.characterId}/wallet/journal/`,
         { characterId: char.characterId }
       );
@@ -260,7 +256,7 @@ export function registerMarketTools(server: McpServer): void {
     async ({ type_id }) => {
       const prices = await esiGet<Array<{ type_id: number; average_price?: number; adjusted_price?: number }>>(
         "/markets/prices/",
-        { public: true }
+        { public: true, cacheTtlMs: MARKET_PRICE_CACHE_TTL }
       );
 
       const db = getDatabase();
@@ -309,7 +305,7 @@ export function registerMarketTools(server: McpServer): void {
       else if (order_type === "sell") url += "&order_type=sell";
       else url += "&order_type=all";
 
-      const orders = await esiGet<EsiOrder[]>(url, { public: true });
+      const orders = await esiGetAll<EsiOrder>(url, { public: true });
 
       const db = getDatabase();
       const typeName = enrichTypeName(db, type_id);
@@ -386,13 +382,13 @@ export function registerMarketTools(server: McpServer): void {
     "get_structure_orders",
     "Get market orders in a player-owned structure (citadel, engineering complex, etc.). Requires esi-markets.structure_markets.v1 scope and docking access.",
     {
-      structure_id: z.number().describe("Structure ID (64-bit). Find from assets or in-game."),
+      structure_id: z.string().regex(/^\d+$/).describe("Structure ID (numeric string — 64-bit IDs exceed JS number precision). Find from assets or in-game."),
       type_id: z.number().optional().describe("Filter to a specific type ID"),
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
     },
     async ({ structure_id, type_id, character_id }) => {
       const char = await getActiveCharacter(character_id);
-      const orders = await esiGet<EsiOrder[]>(
+      const orders = await esiGetAll<EsiOrder>(
         `/markets/structures/${structure_id}/`,
         { characterId: char.characterId }
       );
@@ -451,7 +447,7 @@ export function registerMarketTools(server: McpServer): void {
       region_id: z.number().describe("Region ID (10000002 = The Forge/Jita)"),
     },
     async ({ region_id }) => {
-      const typeIds = await esiGet<number[]>(
+      const typeIds = await esiGetAll<number>(
         `/markets/${region_id}/types/`,
         { public: true }
       );

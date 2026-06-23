@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { esiGet, esiGetAll, getActiveCharacter } from "../auth/esi-client.js";
+import { enrichTypeName, likeContains } from "../utils.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -47,12 +48,7 @@ const ACTIVITY_NAMES: Record<number, string> = {
   11: "Reaction",
 };
 
-function enrichTypeName(db: ReturnType<typeof getDatabase>, typeId: number): string {
-  const row = db.prepare("SELECT typeName FROM invTypes WHERE typeID = ?").get(typeId) as
-    | { typeName: string }
-    | undefined;
-  return row?.typeName ?? `Unknown(${typeId})`;
-}
+const COST_INDEX_CACHE_TTL = 10 * 60 * 1000;
 
 export function registerIndustryEsiTools(server: McpServer): void {
   server.tool(
@@ -87,9 +83,6 @@ export function registerIndustryEsiTools(server: McpServer): void {
         facilityId: j.facility_id,
       }));
 
-      const active = enriched.filter((j) => j.status === "active");
-      const other = enriched.filter((j) => j.status !== "active");
-
       return {
         content: [
           {
@@ -97,7 +90,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
             text: JSON.stringify(
               {
                 characterName: char.characterName,
-                activeJobs: active.length,
+                activeJobs: enriched.filter((j) => j.status === "active").length,
                 totalJobs: enriched.length,
                 jobs: enriched,
               },
@@ -118,14 +111,17 @@ export function registerIndustryEsiTools(server: McpServer): void {
       system_id: z.number().optional().describe("Filter by solar system ID"),
     },
     async ({ system_name, system_id }) => {
-      const indices = await esiGet<EsiCostIndex[]>("/industry/systems/", { public: true });
+      const indices = await esiGet<EsiCostIndex[]>("/industry/systems/", {
+        public: true,
+        cacheTtlMs: COST_INDEX_CACHE_TTL,
+      });
 
       let systemId = system_id;
       if (system_name && !systemId) {
         const db = getDatabase();
         const row = db
-          .prepare("SELECT solarSystemID FROM mapSolarSystems WHERE solarSystemName LIKE ?")
-          .get(`%${system_name}%`) as { solarSystemID: number } | undefined;
+          .prepare("SELECT solarSystemID FROM mapSolarSystems WHERE solarSystemName LIKE ? ESCAPE '\\'")
+          .get(likeContains(system_name)) as { solarSystemID: number } | undefined;
         if (!row) {
           return { content: [{ type: "text", text: `System "${system_name}" not found in SDE.` }] };
         }
@@ -186,7 +182,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
     },
     async ({ character_id, type_name, location_id }) => {
       const char = await getActiveCharacter(character_id);
-      const assets = await esiGet<Array<{
+      const assets = await esiGetAll<{
         item_id: number;
         type_id: number;
         location_id: number;
@@ -194,7 +190,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
         quantity: number;
         location_flag: string;
         is_singleton: boolean;
-      }>>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId });
+      }>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId });
 
       const db = getDatabase();
       let enriched = assets.map((a) => ({
@@ -240,7 +236,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
     },
     async ({ character_id }) => {
       const char = await getActiveCharacter(character_id);
-      const contracts = await esiGet<Array<{
+      const contracts = await esiGetAll<{
         contract_id: number;
         issuer_id: number;
         assignee_id: number;
@@ -256,7 +252,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
         date_completed?: string;
         start_location_id?: number;
         end_location_id?: number;
-      }>>(`/characters/${char.characterId}/contracts/`, { characterId: char.characterId });
+      }>(`/characters/${char.characterId}/contracts/`, { characterId: char.characterId });
 
       return {
         content: [

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
+import { likeContains } from "../utils.js";
 
 export function registerIndustryTools(server: McpServer): void {
   server.tool(
@@ -102,11 +103,11 @@ export function registerIndustryTools(server: McpServer): void {
            FROM industryActivityProducts iap
            JOIN invTypes bp ON iap.typeID = bp.typeID
            JOIN invTypes p ON iap.productTypeID = p.typeID
-           WHERE p.typeName LIKE ?
+           WHERE p.typeName LIKE ? ESCAPE '\\'
            ORDER BY p.typeName
            LIMIT ?`
         )
-        .all(`%${product_name}%`, limit);
+        .all(likeContains(product_name), limit);
       return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
     }
   );

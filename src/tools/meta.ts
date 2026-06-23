@@ -29,11 +29,15 @@ export function registerMetaTools(server: McpServer): void {
         };
       }
 
-      const forbidden = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE|PRAGMA)\b/i;
+      // Defense-in-depth: the database is opened in readonly mode, so writes
+      // fail at the SQLite level regardless. This check catches common mistakes
+      // before they hit the database, but may false-positive on queries
+      // referencing columns/values containing these words.
+      const forbidden = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|ATTACH|DETACH|PRAGMA)\b/i;
       if (forbidden.test(normalized)) {
         return {
           content: [
-            { type: "text", text: "Query contains forbidden keywords. Only read-only queries are allowed." },
+            { type: "text", text: "Query contains forbidden keywords. Only read-only queries are allowed. (Note: the database is read-only, so writes would fail regardless.)" },
           ],
         };
       }

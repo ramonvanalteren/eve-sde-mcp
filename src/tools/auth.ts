@@ -17,7 +17,7 @@ import { getSdeDir } from "../database.js";
 export function registerAuthTools(server: McpServer): void {
   server.tool(
     "esi_login",
-    "Start EVE SSO login. Opens a browser URL for authentication. After the user authenticates, tokens are stored locally. Call this, then tell the user to open the URL in their browser.",
+    "Start EVE SSO login. Opens the browser for authentication and waits for completion (up to 5 minutes). Returns the authenticated character name when done.",
     {
       client_id: z
         .string()
@@ -50,35 +50,40 @@ export function registerAuthTools(server: McpServer): void {
 
       const { authUrl } = startLoginFlow(clientId);
 
-      // Try to open browser
       try {
-        const { exec } = await import("child_process");
-        exec(`open "${authUrl}"`);
+        const { execFile } = await import("child_process");
+        execFile("open", [authUrl]);
       } catch {
         // Browser open is best-effort
       }
 
-      // Wait for the callback in the background
-      waitForLogin()
-        .then((result) => {
-          storeTokens(result.tokens, result.character);
-          setCurrentCharacterId(result.character.characterId);
-          process.stderr.write(
-            `Authenticated as ${result.character.characterName} (${result.character.characterId})\n`
-          );
-        })
-        .catch((err) => {
-          process.stderr.write(`Login failed: ${err}\n`);
-        });
+      process.stderr.write(
+        `Waiting for EVE SSO callback (up to 5 minutes)...\n`
+      );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Opening EVE SSO login in your browser. If it didn't open automatically, visit:\n\n${authUrl}\n\nAfter authenticating, use esi_status to confirm the login succeeded.`,
-          },
-        ],
-      };
+      try {
+        const result = await waitForLogin();
+        storeTokens(result.tokens, result.character);
+        setCurrentCharacterId(result.character.characterId);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Authenticated as ${result.character.characterName} (${result.character.characterId}). Scopes: ${result.character.scopes}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Login failed: ${err instanceof Error ? err.message : String(err)}. Try again with esi_login.`,
+            },
+          ],
+        };
+      }
     }
   );
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
+import { likeContains } from "../utils.js";
 
 export function registerUniverseTools(server: McpServer): void {
   server.tool(
@@ -19,11 +20,11 @@ export function registerUniverseTools(server: McpServer): void {
            FROM mapSolarSystems s
            JOIN mapConstellations c ON s.constellationID = c.constellationID
            JOIN mapRegions r ON s.regionID = r.regionID
-           WHERE s.solarSystemName LIKE ?
+           WHERE s.solarSystemName LIKE ? ESCAPE '\\'
            ORDER BY s.solarSystemName
            LIMIT ?`
         )
-        .all(`%${query}%`, limit);
+        .all(likeContains(query), limit);
       return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
     }
   );
@@ -56,9 +57,9 @@ export function registerUniverseTools(server: McpServer): void {
              FROM mapSolarSystems s
              JOIN mapConstellations c ON s.constellationID = c.constellationID
              JOIN mapRegions r ON s.regionID = r.regionID
-             WHERE s.solarSystemName LIKE ?`
+             WHERE s.solarSystemName LIKE ? ESCAPE '\\'`
           )
-          .get(`%${name}%`);
+          .get(likeContains(name));
       } else {
         return { content: [{ type: "text", text: "Provide either system_id or name." }] };
       }
@@ -112,8 +113,8 @@ export function registerUniverseTools(server: McpServer): void {
         region = db.prepare("SELECT * FROM mapRegions WHERE regionID = ?").get(region_id);
       } else if (name) {
         region = db
-          .prepare("SELECT * FROM mapRegions WHERE regionName LIKE ?")
-          .get(`%${name}%`);
+          .prepare("SELECT * FROM mapRegions WHERE regionName LIKE ? ESCAPE '\\'")
+          .get(likeContains(name));
       } else {
         return { content: [{ type: "text", text: "Provide either region_id or name." }] };
       }
@@ -170,10 +171,10 @@ export function registerUniverseTools(server: McpServer): void {
              FROM staStations st
              JOIN mapSolarSystems s ON st.solarSystemID = s.solarSystemID
              JOIN mapRegions r ON st.regionID = r.regionID
-             WHERE st.stationName LIKE ?
+             WHERE st.stationName LIKE ? ESCAPE '\\'
              LIMIT 1`
           )
-          .get(`%${name}%`);
+          .get(likeContains(name));
       } else {
         return { content: [{ type: "text", text: "Provide either station_id or name." }] };
       }
