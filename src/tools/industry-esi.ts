@@ -49,24 +49,27 @@ const ACTIVITY_NAMES: Record<number, string> = {
 };
 
 const COST_INDEX_CACHE_TTL = 10 * 60 * 1000;
+const ESI_CACHE_TTL = 5 * 60 * 1000;
 
 export function registerIndustryEsiTools(server: McpServer): void {
   server.tool(
     "get_industry_jobs",
-    "Get active and recent industry jobs for the authenticated character — manufacturing, research, invention, reactions.",
+    "Get active and recent industry jobs for the authenticated character — manufacturing, research, invention, reactions. Supports filtering by activity and status.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       include_completed: z.boolean().default(false).describe("Include completed jobs"),
+      activity: z.string().optional().describe("Filter by activity name (e.g. 'Manufacturing', 'Invention', 'Reaction')"),
+      status: z.enum(["active", "cancelled", "delivered", "paused", "ready"]).optional().describe("Filter by job status"),
     },
-    async ({ character_id, include_completed }) => {
+    async ({ character_id, include_completed, activity, status }) => {
       const char = await getActiveCharacter(character_id);
       let url = `/characters/${char.characterId}/industry/jobs/`;
       if (include_completed) url += "?include_completed=true";
 
-      const jobs = await esiGet<EsiIndustryJob[]>(url, { characterId: char.characterId });
+      const jobs = await esiGet<EsiIndustryJob[]>(url, { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL });
 
       const db = getDatabase();
-      const enriched = jobs.map((j) => ({
+      let enriched = jobs.map((j) => ({
         jobId: j.job_id,
         activity: ACTIVITY_NAMES[j.activity_id] ?? `Activity ${j.activity_id}`,
         blueprintName: enrichTypeName(db, j.blueprint_type_id),
@@ -82,6 +85,9 @@ export function registerIndustryEsiTools(server: McpServer): void {
         successfulRuns: j.successful_runs ?? null,
         facilityId: j.facility_id,
       }));
+
+      if (activity) enriched = enriched.filter((j) => j.activity.toLowerCase() === activity.toLowerCase());
+      if (status) enriched = enriched.filter((j) => j.status === status);
 
       return {
         content: [
@@ -190,7 +196,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
         quantity: number;
         location_flag: string;
         is_singleton: boolean;
-      }>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId });
+      }>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL });
 
       const db = getDatabase();
       let enriched = assets.map((a) => ({
@@ -230,13 +236,15 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
   server.tool(
     "get_character_contracts",
-    "Get contracts for the authenticated character — courier, item exchange, and auction contracts.",
+    "Get contracts for the authenticated character — courier, item exchange, and auction contracts. Supports filtering by type and status.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      type: z.enum(["unknown", "item_exchange", "auction", "courier"]).optional().describe("Filter by contract type"),
+      status: z.enum(["outstanding", "in_progress", "finished_issuer", "finished_contractor", "finished", "cancelled", "rejected", "failed", "deleted", "reversed"]).optional().describe("Filter by contract status"),
     },
-    async ({ character_id }) => {
+    async ({ character_id, type, status }) => {
       const char = await getActiveCharacter(character_id);
-      const contracts = await esiGetAll<{
+      let contracts = await esiGetAll<{
         contract_id: number;
         issuer_id: number;
         assignee_id: number;
@@ -252,7 +260,10 @@ export function registerIndustryEsiTools(server: McpServer): void {
         date_completed?: string;
         start_location_id?: number;
         end_location_id?: number;
-      }>(`/characters/${char.characterId}/contracts/`, { characterId: char.characterId });
+      }>(`/characters/${char.characterId}/contracts/`, { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL });
+
+      if (type) contracts = contracts.filter((c) => c.type === type);
+      if (status) contracts = contracts.filter((c) => c.status === status);
 
       return {
         content: [

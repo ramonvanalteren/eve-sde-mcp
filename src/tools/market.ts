@@ -86,16 +86,23 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_character_orders",
-    "Get open market orders for the authenticated character, enriched with item names from the SDE.",
+    "Get open market orders for the authenticated character, enriched with item names from the SDE. Supports filtering by item, side, and location.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      type_id: z.number().optional().describe("Filter to a specific item type ID"),
+      side: z.enum(["buy", "sell"]).optional().describe("Filter to buy or sell orders only"),
+      location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4)"),
     },
-    async ({ character_id }) => {
+    async ({ character_id, type_id, side, location_id }) => {
       const char = await getActiveCharacter(character_id);
-      const orders = await esiGet<EsiOrder[]>(
+      let orders = await esiGet<EsiOrder[]>(
         `/characters/${char.characterId}/orders/`,
         { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
+
+      if (type_id) orders = orders.filter((o) => o.type_id === type_id);
+      if (side) orders = orders.filter((o) => side === "buy" ? o.is_buy_order : !o.is_buy_order);
+      if (location_id) orders = orders.filter((o) => o.location_id === location_id);
 
       const db = getDatabase();
       const enriched = orders.map((o) => ({
@@ -197,16 +204,24 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_wallet_journal",
-    "Get the wallet journal (ISK income/expenses log) for the authenticated character.",
+    "Get the wallet journal (ISK income/expenses log) for the authenticated character. Supports filtering by ref_type and date. Common ref_types for trading: 'brokers_fee', 'transaction_tax', 'market_transaction'.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      ref_type: z.string().optional().describe("Filter by ref_type (e.g. 'brokers_fee', 'transaction_tax', 'market_transaction')"),
+      since: z.string().optional().describe("Only return entries after this ISO date (e.g. '2026-07-01')"),
     },
-    async ({ character_id }) => {
+    async ({ character_id, ref_type, since }) => {
       const char = await getActiveCharacter(character_id);
-      const journal = await esiGetAll<EsiWalletJournalEntry>(
+      let journal = await esiGetAll<EsiWalletJournalEntry>(
         `/characters/${char.characterId}/wallet/journal/`,
-        { characterId: char.characterId }
+        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
+
+      if (ref_type) journal = journal.filter((e) => e.ref_type === ref_type);
+      if (since) {
+        const cutoff = new Date(since).getTime();
+        journal = journal.filter((e) => new Date(e.date).getTime() >= cutoff);
+      }
 
       return {
         content: [
@@ -225,16 +240,28 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_wallet_transactions",
-    "Get recent wallet transactions (market buys/sells) for the authenticated character, enriched with item names.",
+    "Get recent wallet transactions (market buys/sells) for the authenticated character, enriched with item names. Supports filtering by item, side, location, and date.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      type_id: z.number().optional().describe("Filter to a specific item type ID"),
+      side: z.enum(["buy", "sell"]).optional().describe("Filter to buy or sell transactions only"),
+      location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4)"),
+      since: z.string().optional().describe("Only return transactions after this ISO date (e.g. '2026-07-01')"),
     },
-    async ({ character_id }) => {
+    async ({ character_id, type_id, side, location_id, since }) => {
       const char = await getActiveCharacter(character_id);
-      const transactions = await esiGet<EsiTransaction[]>(
+      let transactions = await esiGet<EsiTransaction[]>(
         `/characters/${char.characterId}/wallet/transactions/`,
-        { characterId: char.characterId }
+        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
+
+      if (type_id) transactions = transactions.filter((t) => t.type_id === type_id);
+      if (side) transactions = transactions.filter((t) => side === "buy" ? t.is_buy : !t.is_buy);
+      if (location_id) transactions = transactions.filter((t) => t.location_id === location_id);
+      if (since) {
+        const cutoff = new Date(since).getTime();
+        transactions = transactions.filter((t) => new Date(t.date).getTime() >= cutoff);
+      }
 
       const db = getDatabase();
       const enriched = transactions.map((t) => ({
@@ -414,7 +441,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       const orders = await esiGetAll<EsiOrder>(
         `/markets/structures/${structure_id}/`,
-        { characterId: char.characterId }
+        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
 
       const db = getDatabase();
