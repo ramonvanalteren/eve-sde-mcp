@@ -49,6 +49,8 @@ interface EsiTransaction {
 }
 
 const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
+const REGION_ORDERS_CACHE_TTL = 5 * 60 * 1000;
+const JITA_TRADE_HUB = 60003760;
 
 export function registerMarketTools(server: McpServer): void {
   server.tool(
@@ -92,7 +94,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       const orders = await esiGet<EsiOrder[]>(
         `/characters/${char.characterId}/orders/`,
-        { characterId: char.characterId }
+        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
 
       const db = getDatabase();
@@ -138,16 +140,30 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_order_history",
-    "Get historical (completed/cancelled/expired) market orders for the authenticated character.",
+    "Get historical (completed/cancelled/expired) market orders for the authenticated character. Supports filtering by item, state, side, location, and date to avoid returning the full 90-day history.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      type_id: z.number().optional().describe("Filter to a specific item type ID"),
+      state: z.enum(["expired", "cancelled", "fulfilled"]).optional().describe("Filter by order state"),
+      side: z.enum(["buy", "sell"]).optional().describe("Filter to buy or sell orders only"),
+      location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4)"),
+      issued_after: z.string().optional().describe("Only return orders issued after this ISO date (e.g. '2026-07-01')"),
     },
-    async ({ character_id }) => {
+    async ({ character_id, type_id, state, side, location_id, issued_after }) => {
       const char = await getActiveCharacter(character_id);
-      const orders = await esiGetAll<EsiOrder & { state: string }>(
+      let orders = await esiGetAll<EsiOrder & { state: string }>(
         `/characters/${char.characterId}/orders/history/`,
-        { characterId: char.characterId }
+        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
       );
+
+      if (type_id) orders = orders.filter((o) => o.type_id === type_id);
+      if (state) orders = orders.filter((o) => o.state === state);
+      if (side) orders = orders.filter((o) => side === "buy" ? o.is_buy_order : !o.is_buy_order);
+      if (location_id) orders = orders.filter((o) => o.location_id === location_id);
+      if (issued_after) {
+        const cutoff = new Date(issued_after).getTime();
+        orders = orders.filter((o) => new Date(o.issued).getTime() >= cutoff);
+      }
 
       const db = getDatabase();
       const enriched = orders.map((o) => ({
@@ -159,6 +175,8 @@ export function registerMarketTools(server: McpServer): void {
         volumeRemain: o.volume_remain,
         volumeTotal: o.volume_total,
         state: o.state,
+        locationId: o.location_id,
+        regionId: o.region_id,
         issued: o.issued,
       }));
 
@@ -293,19 +311,24 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_region_orders",
-    "Get market orders for a specific item in a region (public, no auth needed). Use for price checking.",
+    "Get market orders for a specific item in a region (public, no auth needed). Use for price checking. Set location_id to filter to a specific station (e.g. 60003760 for Jita 4-4 CNAP).",
     {
       region_id: z.number().describe("Region ID (10000002 = The Forge/Jita, 10000043 = Domain/Amarr)"),
       type_id: z.number().describe("Type ID of the item"),
       order_type: z.enum(["buy", "sell", "all"]).default("all").describe("Filter by order type"),
+      location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4 CNAP)"),
     },
-    async ({ region_id, type_id, order_type }) => {
+    async ({ region_id, type_id, order_type, location_id }) => {
       let url = `/markets/${region_id}/orders/?type_id=${type_id}`;
       if (order_type === "buy") url += "&order_type=buy";
       else if (order_type === "sell") url += "&order_type=sell";
       else url += "&order_type=all";
 
-      const orders = await esiGetAll<EsiOrder>(url, { public: true });
+      let orders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
+
+      if (location_id) {
+        orders = orders.filter((o) => o.location_id === location_id);
+      }
 
       const db = getDatabase();
       const typeName = enrichTypeName(db, type_id);
@@ -322,6 +345,7 @@ export function registerMarketTools(server: McpServer): void {
                 typeName,
                 typeId: type_id,
                 regionId: region_id,
+                ...(location_id ? { locationId: location_id } : {}),
                 bestBuy: buyOrders[0]?.price ?? null,
                 bestSell: sellOrders[0]?.price ?? null,
                 spread: buyOrders[0] && sellOrders[0]
@@ -357,7 +381,7 @@ export function registerMarketTools(server: McpServer): void {
         lowest: number;
         order_count: number;
         volume: number;
-      }>>(`/markets/${region_id}/history/?type_id=${type_id}`, { public: true });
+      }>>(`/markets/${region_id}/history/?type_id=${type_id}`, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
 
       const db = getDatabase();
       const typeName = enrichTypeName(db, type_id);
@@ -458,6 +482,90 @@ export function registerMarketTools(server: McpServer): void {
             type: "text",
             text: JSON.stringify(
               { regionId: region_id, typeCount: typeIds.length, typeIds },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_portfolio_margins",
+    "Fetch market data for multiple items in parallel and calculate margins. Optimized for reviewing station trading positions — fetches all items concurrently and filters to a specific station. Returns best buy/sell prices, spread, and margin after taxes for each item.",
+    {
+      type_ids: z.array(z.number()).describe("Array of type IDs to check"),
+      region_id: z.number().default(10000002).describe("Region ID (default: 10000002 = The Forge)"),
+      location_id: z.number().default(JITA_TRADE_HUB).describe("Station/structure to filter orders to (default: 60003760 = Jita 4-4 CNAP)"),
+      sales_tax_pct: z.number().default(3.6).describe("Sales tax percentage (default 3.6% for Accounting V + no standings)"),
+      broker_fee_pct: z.number().default(1.0).describe("Broker fee percentage (default 1.0% for Broker Relations V + no standings)"),
+    },
+    async ({ type_ids, region_id, location_id, sales_tax_pct, broker_fee_pct }) => {
+      const db = getDatabase();
+
+      const results = await Promise.all(
+        type_ids.map(async (type_id) => {
+          const url = `/markets/${region_id}/orders/?type_id=${type_id}&order_type=all`;
+          try {
+            const allOrders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
+            const orders = allOrders.filter((o) => o.location_id === location_id);
+
+            const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
+            const sellOrders = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
+
+            const bestBuy = buyOrders[0]?.price ?? null;
+            const bestSell = sellOrders[0]?.price ?? null;
+
+            let margin = null;
+            let profitPerUnit = null;
+            if (bestBuy !== null && bestSell !== null) {
+              const buyTotal = bestBuy * (1 + broker_fee_pct / 100);
+              const sellNet = bestSell * (1 - sales_tax_pct / 100 - broker_fee_pct / 100);
+              profitPerUnit = sellNet - buyTotal;
+              margin = ((profitPerUnit / buyTotal) * 100);
+            }
+
+            return {
+              typeId: type_id,
+              typeName: enrichTypeName(db, type_id),
+              bestBuy,
+              bestSell,
+              spread: bestBuy && bestSell
+                ? ((bestSell - bestBuy) / bestSell * 100)
+                : null,
+              margin,
+              profitPerUnit,
+              buyOrderCount: buyOrders.length,
+              sellOrderCount: sellOrders.length,
+            };
+          } catch (err) {
+            return {
+              typeId: type_id,
+              typeName: enrichTypeName(db, type_id),
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        })
+      );
+
+      const successful = results.filter((r) => !("error" in r));
+      const sorted = successful.sort((a, b) => (b.margin ?? -Infinity) - (a.margin ?? -Infinity));
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                locationId: location_id,
+                regionId: region_id,
+                salesTaxPct: sales_tax_pct,
+                brokerFeePct: broker_fee_pct,
+                itemCount: results.length,
+                items: sorted,
+                errors: results.filter((r) => "error" in r),
+              },
               null,
               2
             ),
