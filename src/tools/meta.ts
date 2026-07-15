@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase, getMetadata, sdeExists, listTables, reopenDatabase } from "../database.js";
 import { downloadSde } from "../downloader.js";
+import { jsonResult } from "../utils.js";
 
 export function registerMetaTools(server: McpServer): void {
   server.tool(
@@ -45,7 +46,7 @@ export function registerMetaTools(server: McpServer): void {
       const db = getDatabase();
       try {
         const rows = db.prepare(sql).all(...(params ?? []));
-        return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+        return jsonResult(rows);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text", text: `Query error: ${message}` }] };
@@ -74,7 +75,7 @@ export function registerMetaTools(server: McpServer): void {
 
       const tables = listTables();
       const result = { installed: true, metadata, tableCount: tables.length, tables };
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result);
     }
   );
 

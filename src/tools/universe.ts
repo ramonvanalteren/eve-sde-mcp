@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { likeContains } from "../utils.js";
+import { likeContains, jsonResult } from "../utils.js";
 
 export function registerUniverseTools(server: McpServer): void {
   server.tool(
@@ -25,7 +25,7 @@ export function registerUniverseTools(server: McpServer): void {
            LIMIT ?`
         )
         .all(likeContains(query), limit);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      return jsonResult(rows);
     }
   );
 
@@ -87,14 +87,7 @@ export function registerUniverseTools(server: McpServer): void {
         )
         .all((system as any).solarSystemID);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ system, connectedSystems: jumps, stations }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ system, connectedSystems: jumps, stations });
     }
   );
 
@@ -135,11 +128,7 @@ export function registerUniverseTools(server: McpServer): void {
         )
         .all((region as any).regionID);
 
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ region, constellations }, null, 2) },
-        ],
-      };
+      return jsonResult({ region, constellations });
     }
   );
 
@@ -183,7 +172,7 @@ export function registerUniverseTools(server: McpServer): void {
         return { content: [{ type: "text", text: "Station not found." }] };
       }
 
-      return { content: [{ type: "text", text: JSON.stringify(station, null, 2) }] };
+      return jsonResult(station);
     }
   );
 }

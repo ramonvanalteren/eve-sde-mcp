@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { esiGet, esiGetAll, getActiveCharacter } from "../auth/esi-client.js";
-import { enrichTypeName } from "../utils.js";
+import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
+import { enrichTypeName, jsonResult } from "../utils.js";
 
 interface EsiOrder {
   order_id: number;
@@ -49,8 +49,29 @@ interface EsiTransaction {
 }
 
 const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
-const REGION_ORDERS_CACHE_TTL = 5 * 60 * 1000;
 const JITA_TRADE_HUB = 60003760;
+const MAX_CONCURRENT_ESI = 10;
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+  return results;
+}
 
 export function registerMarketTools(server: McpServer): void {
   server.tool(
@@ -65,22 +86,11 @@ export function registerMarketTools(server: McpServer): void {
         `/characters/${char.characterId}/wallet/`,
         { characterId: char.characterId }
       );
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                characterName: char.characterName,
-                balance,
-                formatted: balance.toLocaleString("en-US", { minimumFractionDigits: 2 }) + " ISK",
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        characterName: char.characterName,
+        balance,
+        formatted: balance.toLocaleString("en-US", { minimumFractionDigits: 2 }) + " ISK",
+      });
     }
   );
 
@@ -97,7 +107,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       let orders = await esiGet<EsiOrder[]>(
         `/characters/${char.characterId}/orders/`,
-        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
+        { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL }
       );
 
       if (type_id) orders = orders.filter((o) => o.type_id === type_id);
@@ -124,24 +134,13 @@ export function registerMarketTools(server: McpServer): void {
       const buyOrders = enriched.filter((o) => o.isBuyOrder);
       const sellOrders = enriched.filter((o) => !o.isBuyOrder);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                characterName: char.characterName,
-                totalOrders: enriched.length,
-                buyOrders: buyOrders.length,
-                sellOrders: sellOrders.length,
-                orders: enriched,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        characterName: char.characterName,
+        totalOrders: enriched.length,
+        buyOrders: buyOrders.length,
+        sellOrders: sellOrders.length,
+        orders: enriched,
+      });
     }
   );
 
@@ -160,7 +159,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       let orders = await esiGetAll<EsiOrder & { state: string }>(
         `/characters/${char.characterId}/orders/history/`,
-        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
+        { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL }
       );
 
       if (type_id) orders = orders.filter((o) => o.type_id === type_id);
@@ -187,18 +186,7 @@ export function registerMarketTools(server: McpServer): void {
         issued: o.issued,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, count: enriched.length, orders: enriched },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, count: enriched.length, orders: enriched });
     }
   );
 
@@ -214,7 +202,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       let journal = await esiGetAll<EsiWalletJournalEntry>(
         `/characters/${char.characterId}/wallet/journal/`,
-        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
+        { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL }
       );
 
       if (ref_type) journal = journal.filter((e) => e.ref_type === ref_type);
@@ -223,18 +211,7 @@ export function registerMarketTools(server: McpServer): void {
         journal = journal.filter((e) => new Date(e.date).getTime() >= cutoff);
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, entries: journal.length, journal },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, entries: journal.length, journal });
     }
   );
 
@@ -252,7 +229,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       let transactions = await esiGet<EsiTransaction[]>(
         `/characters/${char.characterId}/wallet/transactions/`,
-        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
+        { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL }
       );
 
       if (type_id) transactions = transactions.filter((t) => t.type_id === type_id);
@@ -277,18 +254,7 @@ export function registerMarketTools(server: McpServer): void {
         clientId: t.client_id,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, count: enriched.length, transactions: enriched },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, count: enriched.length, transactions: enriched });
     }
   );
 
@@ -311,28 +277,10 @@ export function registerMarketTools(server: McpServer): void {
         if (!match) {
           return { content: [{ type: "text", text: `No price data for type ${type_id}.` }] };
         }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                { ...match, typeName: enrichTypeName(db, match.type_id) },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({ ...match, typeName: enrichTypeName(db, match.type_id) });
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ count: prices.length, note: "Use type_id parameter to filter. Full list is ~13k items." }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ count: prices.length, note: "Use type_id parameter to filter. Full list is ~13k items." });
     }
   );
 
@@ -351,7 +299,7 @@ export function registerMarketTools(server: McpServer): void {
       else if (order_type === "sell") url += "&order_type=sell";
       else url += "&order_type=all";
 
-      let orders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
+      let orders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: ESI_CACHE_TTL });
 
       if (location_id) {
         orders = orders.filter((o) => o.location_id === location_id);
@@ -363,32 +311,21 @@ export function registerMarketTools(server: McpServer): void {
       const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
       const sellOrders = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                typeName,
-                typeId: type_id,
-                regionId: region_id,
-                ...(location_id ? { locationId: location_id } : {}),
-                bestBuy: buyOrders[0]?.price ?? null,
-                bestSell: sellOrders[0]?.price ?? null,
-                spread: buyOrders[0] && sellOrders[0]
-                  ? ((sellOrders[0].price - buyOrders[0].price) / sellOrders[0].price * 100).toFixed(2) + "%"
-                  : null,
-                buyOrderCount: buyOrders.length,
-                sellOrderCount: sellOrders.length,
-                topBuyOrders: buyOrders.slice(0, 5),
-                topSellOrders: sellOrders.slice(0, 5),
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        typeName,
+        typeId: type_id,
+        regionId: region_id,
+        ...(location_id ? { locationId: location_id } : {}),
+        bestBuy: buyOrders[0]?.price ?? null,
+        bestSell: sellOrders[0]?.price ?? null,
+        spread: buyOrders[0] && sellOrders[0]
+          ? ((sellOrders[0].price - buyOrders[0].price) / sellOrders[0].price * 100).toFixed(2) + "%"
+          : null,
+        buyOrderCount: buyOrders.length,
+        sellOrderCount: sellOrders.length,
+        topBuyOrders: buyOrders.slice(0, 5),
+        topSellOrders: sellOrders.slice(0, 5),
+      });
     }
   );
 
@@ -408,24 +345,13 @@ export function registerMarketTools(server: McpServer): void {
         lowest: number;
         order_count: number;
         volume: number;
-      }>>(`/markets/${region_id}/history/?type_id=${type_id}`, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
+      }>>(`/markets/${region_id}/history/?type_id=${type_id}`, { public: true, cacheTtlMs: ESI_CACHE_TTL });
 
       const db = getDatabase();
       const typeName = enrichTypeName(db, type_id);
       const recent = history.slice(-days);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { typeName, typeId: type_id, regionId: region_id, days: recent.length, history: recent },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ typeName, typeId: type_id, regionId: region_id, days: recent.length, history: recent });
     }
   );
 
@@ -441,7 +367,7 @@ export function registerMarketTools(server: McpServer): void {
       const char = await getActiveCharacter(character_id);
       const orders = await esiGetAll<EsiOrder>(
         `/markets/structures/${structure_id}/`,
-        { characterId: char.characterId, cacheTtlMs: REGION_ORDERS_CACHE_TTL }
+        { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL }
       );
 
       const db = getDatabase();
@@ -467,27 +393,16 @@ export function registerMarketTools(server: McpServer): void {
       const buyOrders = enriched.filter((o) => o.isBuyOrder).sort((a, b) => b.price - a.price);
       const sellOrders = enriched.filter((o) => !o.isBuyOrder).sort((a, b) => a.price - b.price);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                characterName: char.characterName,
-                structureId: structure_id,
-                totalOrders: enriched.length,
-                buyOrders: buyOrders.length,
-                sellOrders: sellOrders.length,
-                bestBuy: buyOrders[0]?.price ?? null,
-                bestSell: sellOrders[0]?.price ?? null,
-                orders: enriched,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        characterName: char.characterName,
+        structureId: structure_id,
+        totalOrders: enriched.length,
+        buyOrders: buyOrders.length,
+        sellOrders: sellOrders.length,
+        bestBuy: buyOrders[0]?.price ?? null,
+        bestSell: sellOrders[0]?.price ?? null,
+        orders: enriched,
+      });
     }
   );
 
@@ -503,18 +418,7 @@ export function registerMarketTools(server: McpServer): void {
         { public: true }
       );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { regionId: region_id, typeCount: typeIds.length, typeIds },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ regionId: region_id, typeCount: typeIds.length, typeIds });
     }
   );
 
@@ -531,11 +435,13 @@ export function registerMarketTools(server: McpServer): void {
     async ({ type_ids, region_id, location_id, sales_tax_pct, broker_fee_pct }) => {
       const db = getDatabase();
 
-      const results = await Promise.all(
-        type_ids.map(async (type_id) => {
+      const results = await mapConcurrent(
+        type_ids,
+        MAX_CONCURRENT_ESI,
+        async (type_id) => {
           const url = `/markets/${region_id}/orders/?type_id=${type_id}&order_type=all`;
           try {
-            const allOrders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: REGION_ORDERS_CACHE_TTL });
+            const allOrders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: ESI_CACHE_TTL });
             const orders = allOrders.filter((o) => o.location_id === location_id);
 
             const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
@@ -573,32 +479,21 @@ export function registerMarketTools(server: McpServer): void {
               error: err instanceof Error ? err.message : String(err),
             };
           }
-        })
+        }
       );
 
       const successful = results.filter((r) => !("error" in r));
       const sorted = successful.sort((a, b) => (b.margin ?? -Infinity) - (a.margin ?? -Infinity));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                locationId: location_id,
-                regionId: region_id,
-                salesTaxPct: sales_tax_pct,
-                brokerFeePct: broker_fee_pct,
-                itemCount: results.length,
-                items: sorted,
-                errors: results.filter((r) => "error" in r),
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        locationId: location_id,
+        regionId: region_id,
+        salesTaxPct: sales_tax_pct,
+        brokerFeePct: broker_fee_pct,
+        itemCount: results.length,
+        items: sorted,
+        errors: results.filter((r) => "error" in r),
+      });
     }
   );
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
-import { enrichTypeName, enrichSystemName } from "../utils.js";
+import { enrichTypeName, enrichSystemName, jsonResult } from "../utils.js";
 
 interface EsiKillmailRef {
   killmail_id: number;
@@ -78,22 +78,11 @@ export function registerKillmailTools(server: McpServer): void {
         { characterId: char.characterId }
       );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                characterName: char.characterName,
-                count: refs.length,
-                killmails: refs,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        characterName: char.characterName,
+        count: refs.length,
+        killmails: refs,
+      });
     }
   );
 
@@ -141,34 +130,23 @@ export function registerKillmailTools(server: McpServer): void {
         factionId: a.faction_id,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                killmailId: km.killmail_id,
-                time: km.killmail_time,
-                system: enrichSystemName(db, km.solar_system_id),
-                systemId: km.solar_system_id,
-                victim: {
-                  shipName: enrichTypeName(db, km.victim.ship_type_id),
-                  shipTypeId: km.victim.ship_type_id,
-                  damageTaken: km.victim.damage_taken,
-                  characterId: km.victim.character_id,
-                  corporationId: km.victim.corporation_id,
-                  allianceId: km.victim.alliance_id,
-                  fittedItems: fitted,
-                },
-                attackers: enrichedAttackers,
-                attackerCount: km.attackers.length,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        killmailId: km.killmail_id,
+        time: km.killmail_time,
+        system: enrichSystemName(db, km.solar_system_id),
+        systemId: km.solar_system_id,
+        victim: {
+          shipName: enrichTypeName(db, km.victim.ship_type_id),
+          shipTypeId: km.victim.ship_type_id,
+          damageTaken: km.victim.damage_taken,
+          characterId: km.victim.character_id,
+          corporationId: km.victim.corporation_id,
+          allianceId: km.victim.alliance_id,
+          fittedItems: fitted,
+        },
+        attackers: enrichedAttackers,
+        attackerCount: km.attackers.length,
+      });
     }
   );
 }

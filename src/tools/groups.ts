@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { likeContains } from "../utils.js";
+import { likeContains, jsonResult } from "../utils.js";
 
 export function registerGroupTools(server: McpServer): void {
   server.tool(
@@ -56,7 +56,7 @@ export function registerGroupTools(server: McpServer): void {
         result.types = types;
       }
 
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result);
     }
   );
 
@@ -97,9 +97,7 @@ export function registerGroupTools(server: McpServer): void {
         )
         .all((category as any).categoryID);
 
-      return {
-        content: [{ type: "text", text: JSON.stringify({ category, groups }, null, 2) }],
-      };
+      return jsonResult({ category, groups });
     }
   );
 
@@ -124,7 +122,7 @@ export function registerGroupTools(server: McpServer): void {
              ORDER BY marketGroupName`
           )
           .all();
-        return { content: [{ type: "text", text: JSON.stringify(topLevel, null, 2) }] };
+        return jsonResult(topLevel);
       }
 
       const group = db
@@ -153,11 +151,7 @@ export function registerGroupTools(server: McpServer): void {
         )
         .all(market_group_id);
 
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ group, childGroups: children, types }, null, 2) },
-        ],
-      };
+      return jsonResult({ group, childGroups: children, types });
     }
   );
 }

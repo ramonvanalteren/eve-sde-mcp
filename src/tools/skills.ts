@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { jsonResult } from "../utils.js";
 
 interface EsiSkill {
   skill_id: number;
@@ -103,7 +104,7 @@ export function registerSkillTools(server: McpServer): void {
         skills,
       };
 
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result);
     }
   );
 
@@ -137,18 +138,7 @@ export function registerSkillTools(server: McpServer): void {
         };
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, queueLength: enriched.length, queue: enriched },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, queueLength: enriched.length, queue: enriched });
     }
   );
 
@@ -165,14 +155,7 @@ export function registerSkillTools(server: McpServer): void {
         { characterId: char.characterId }
       );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ characterName: char.characterName, ...attrs }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, ...attrs });
     }
   );
 
@@ -262,7 +245,7 @@ export function registerSkillTools(server: McpServer): void {
         ...(missing.length > 0 ? { missingSkills: missing } : {}),
       };
 
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result);
     }
   );
 }

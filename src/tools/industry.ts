@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { likeContains } from "../utils.js";
+import { likeContains, jsonResult } from "../utils.js";
 
 export function registerIndustryTools(server: McpServer): void {
   server.tool(
@@ -75,14 +75,7 @@ export function registerIndustryTools(server: McpServer): void {
         .all(blueprint_type_id)
         .map((r: any) => ({ ...r, activityName: ACTIVITY_NAMES[r.activityID] ?? `Activity ${r.activityID}` }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ blueprint, activities, materials, products, skills }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ blueprint, activities, materials, products, skills });
     }
   );
 
@@ -108,7 +101,7 @@ export function registerIndustryTools(server: McpServer): void {
            LIMIT ?`
         )
         .all(likeContains(product_name), limit);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      return jsonResult(rows);
     }
   );
 }

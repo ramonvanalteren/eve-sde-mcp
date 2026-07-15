@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { esiGet, esiGetAll, getActiveCharacter } from "../auth/esi-client.js";
-import { enrichTypeName, likeContains } from "../utils.js";
+import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
+import { enrichTypeName, likeContains, jsonResult } from "../utils.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -49,7 +49,6 @@ const ACTIVITY_NAMES: Record<number, string> = {
 };
 
 const COST_INDEX_CACHE_TTL = 10 * 60 * 1000;
-const ESI_CACHE_TTL = 5 * 60 * 1000;
 
 export function registerIndustryEsiTools(server: McpServer): void {
   server.tool(
@@ -89,23 +88,12 @@ export function registerIndustryEsiTools(server: McpServer): void {
       if (activity) enriched = enriched.filter((j) => j.activity.toLowerCase() === activity.toLowerCase());
       if (status) enriched = enriched.filter((j) => j.status === status);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                characterName: char.characterName,
-                activeJobs: enriched.filter((j) => j.status === "active").length,
-                totalJobs: enriched.length,
-                jobs: enriched,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        characterName: char.characterName,
+        activeJobs: enriched.filter((j) => j.status === "active").length,
+        totalJobs: enriched.length,
+        jobs: enriched,
+      });
     }
   );
 
@@ -145,36 +133,14 @@ export function registerIndustryEsiTools(server: McpServer): void {
           .prepare("SELECT solarSystemName FROM mapSolarSystems WHERE solarSystemID = ?")
           .get(systemId) as { solarSystemName: string } | undefined;
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  systemName: sysInfo?.solarSystemName ?? systemId,
-                  systemId,
-                  costIndices: match.cost_indices,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          systemName: sysInfo?.solarSystemName ?? systemId,
+          systemId,
+          costIndices: match.cost_indices,
+        });
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { count: indices.length, note: "Use system_name or system_id to filter. Returns all ~5k systems otherwise." },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ count: indices.length, note: "Use system_name or system_id to filter. Returns all ~5k systems otherwise." });
     }
   );
 
@@ -219,18 +185,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
         enriched = enriched.filter((a) => a.locationId === location_id);
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, assetCount: enriched.length, assets: enriched },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, assetCount: enriched.length, assets: enriched });
     }
   );
 
@@ -265,18 +220,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
       if (type) contracts = contracts.filter((c) => c.type === type);
       if (status) contracts = contracts.filter((c) => c.status === status);
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, contractCount: contracts.length, contracts },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, contractCount: contracts.length, contracts });
     }
   );
 }

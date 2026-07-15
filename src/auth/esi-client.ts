@@ -6,6 +6,11 @@ import { getCurrentCharacter, updateTokens, getTokens } from "./tokens.js";
 import type { StoredCharacter } from "./tokens.js";
 
 const ESI_BASE = "https://esi.evetech.net/latest";
+const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+
+export const ESI_CACHE_TTL = 5 * 60 * 1000;
 
 export interface EsiRequestOptions {
   characterId?: number;
@@ -53,11 +58,25 @@ export async function getValidToken(
   }
 
   const fiveMinutes = 5 * 60 * 1000;
-  if (character.expiresAt.getTime() - Date.now() < fiveMinutes) {
+  const timeLeft = character.expiresAt.getTime() - Date.now();
+  if (timeLeft < fiveMinutes) {
+    const expired = timeLeft <= 0;
+    process.stderr.write(
+      `ESI token for ${character.characterName} ${expired ? "expired" : "expiring soon"}, refreshing...\n`
+    );
     const clientId = readClientId();
-    const newTokens = await refreshAccessToken(character.refreshToken, clientId);
-    updateTokens(character.characterId, newTokens);
-    character = getTokens(character.characterId)!;
+    try {
+      const newTokens = await refreshAccessToken(character.refreshToken, clientId);
+      updateTokens(character.characterId, newTokens);
+      character = getTokens(character.characterId)!;
+      process.stderr.write(`ESI token refreshed, valid for ${Math.round(newTokens.expiresAt.getTime() - Date.now()) / 1000}s\n`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Token refresh failed for ${character.characterName}: ${msg}. ` +
+        `Use the esi_login tool to re-authenticate.`
+      );
+    }
   }
 
   return { token: character.accessToken, character };
@@ -88,7 +107,30 @@ async function handleResponse<T>(response: Response, esiPath: string): Promise<T
     throw new Error(`ESI ${esiPath} failed (${response.status}): ${body}`);
   }
 
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  esiPath: string
+): Promise<Response> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(url, init);
+    if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_RETRIES) {
+      return response;
+    }
+    process.stderr.write(
+      `ESI ${response.status} on ${esiPath}, retry ${attempt + 1}/${MAX_RETRIES}...\n`
+    );
+    await sleep(RETRY_DELAY_MS * (attempt + 1));
+  }
+  return fetch(url, init);
 }
 
 async function buildHeaders(opts?: EsiRequestOptions): Promise<Record<string, string>> {
@@ -111,7 +153,7 @@ export async function esiGet<T>(
 
   const url = `${ESI_BASE}${esiPath}`;
   const headers = await buildHeaders(opts);
-  const response = await fetch(url, { headers });
+  const response = await fetchWithRetry(url, { headers }, esiPath);
   const data = await handleResponse<T>(response, esiPath);
 
   if (opts?.cacheTtlMs) {
@@ -133,7 +175,7 @@ export async function esiGetAll<T>(
   const url = `${ESI_BASE}${esiPath}`;
   const headers = await buildHeaders(opts);
 
-  const firstResponse = await fetch(url, { headers });
+  const firstResponse = await fetchWithRetry(url, { headers }, esiPath);
   const firstPage = await handleResponse<T[]>(firstResponse, esiPath);
 
   const totalPages = parseInt(firstResponse.headers.get("x-pages") ?? "1", 10);
@@ -148,7 +190,7 @@ export async function esiGetAll<T>(
   for (let page = 2; page <= totalPages; page++) {
     const pageUrl = `${ESI_BASE}${esiPath}${separator}page=${page}`;
     pagePromises.push(
-      fetch(pageUrl, { headers }).then((r) => handleResponse<T[]>(r, esiPath))
+      fetchWithRetry(pageUrl, { headers }, esiPath).then((r) => handleResponse<T[]>(r, esiPath))
     );
   }
 
@@ -167,7 +209,7 @@ export async function esiPost<T>(
   const url = `${ESI_BASE}${esiPath}`;
   const { token } = await getValidToken(opts?.characterId);
 
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -175,7 +217,7 @@ export async function esiPost<T>(
       Accept: "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, esiPath);
 
   return handleResponse<T>(response, esiPath);
 }
@@ -187,25 +229,15 @@ export async function esiDelete(
   const url = `${ESI_BASE}${esiPath}`;
   const { token } = await getValidToken(opts?.characterId);
 
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
     },
-  });
+  }, esiPath);
 
-  checkRateLimit(response, esiPath);
-
-  if (response.status === 420) {
-    const reset = response.headers.get("x-esi-error-limit-reset") ?? "unknown";
-    throw new Error(`ESI rate limited on ${esiPath}. Retry after ${reset} seconds.`);
-  }
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`ESI DELETE ${esiPath} failed (${response.status}): ${body}`);
-  }
+  await handleResponse<void>(response, esiPath);
 }
 
 export async function getActiveCharacter(

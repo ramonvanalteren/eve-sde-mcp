@@ -2,7 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGetAll, esiPost, esiDelete, getActiveCharacter } from "../auth/esi-client.js";
-import { enrichTypeName } from "../utils.js";
+import { enrichTypeName, jsonResult } from "../utils.js";
 
 const SLOT_EFFECT_IDS: Record<number, string> = {
   12: "hi",
@@ -217,18 +217,7 @@ export function registerFittingTools(server: McpServer): void {
         );
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              { characterName: char.characterName, fittingCount: enriched.length, fittings: enriched },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({ characterName: char.characterName, fittingCount: enriched.length, fittings: enriched });
     }
   );
 
@@ -321,26 +310,15 @@ export function registerFittingTools(server: McpServer): void {
         quantity: item.quantity,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                success: true,
-                fittingId: result.fitting_id,
-                name: fitName,
-                ship: enrichTypeName(db, fitShipTypeId),
-                characterName: char.characterName,
-                itemCount: fitItems.length,
-                items: itemSummary,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        success: true,
+        fittingId: result.fitting_id,
+        name: fitName,
+        ship: enrichTypeName(db, fitShipTypeId),
+        characterName: char.characterName,
+        itemCount: fitItems.length,
+        items: itemSummary,
+      });
     }
   );
 
@@ -387,26 +365,15 @@ export function registerFittingTools(server: McpServer): void {
         quantity: item.quantity,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                shipName: parsed.shipName,
-                shipTypeId: parsed.shipTypeId,
-                fitName: parsed.fitName,
-                itemCount: parsed.items.length,
-                items: itemDetails,
-                errors: parsed.errors.length > 0 ? parsed.errors : undefined,
-                valid: parsed.errors.length === 0 && parsed.items.length > 0,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
+      return jsonResult({
+        shipName: parsed.shipName,
+        shipTypeId: parsed.shipTypeId,
+        fitName: parsed.fitName,
+        itemCount: parsed.items.length,
+        items: itemDetails,
+        errors: parsed.errors.length > 0 ? parsed.errors : undefined,
+        valid: parsed.errors.length === 0 && parsed.items.length > 0,
+      });
     }
   );
 }

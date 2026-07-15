@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
-import { likeContains } from "../utils.js";
+import { likeContains, jsonResult } from "../utils.js";
 
 export function registerTypeTools(server: McpServer): void {
   server.tool(
@@ -50,7 +50,7 @@ export function registerTypeTools(server: McpServer): void {
       params.push(limit);
 
       const rows = db.prepare(sql).all(...params);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      return jsonResult(rows);
     }
   );
 
@@ -112,7 +112,7 @@ export function registerTypeTools(server: McpServer): void {
         .get(type_id);
 
       const result = { type: typeInfo, attributes, effects, traits, meta: metaInfo || null };
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result);
     }
   );
 
@@ -148,7 +148,7 @@ export function registerTypeTools(server: McpServer): void {
       sql += " ORDER BY a.categoryID, a.attributeName";
 
       const rows = db.prepare(sql).all(...params);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      return jsonResult(rows);
     }
   );
 
@@ -170,7 +170,7 @@ export function registerTypeTools(server: McpServer): void {
            ORDER BY e.effectName`
         )
         .all(type_id);
-      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      return jsonResult(rows);
     }
   );
 
@@ -231,11 +231,7 @@ export function registerTypeTools(server: McpServer): void {
         comparison[attrKey][typeNames[row.typeID]] = { value: row.value, unit: row.unit };
       }
 
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ types: typeNames, comparison }, null, 2) },
-        ],
-      };
+      return jsonResult({ types: typeNames, comparison });
     }
   );
 }
