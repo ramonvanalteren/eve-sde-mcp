@@ -164,3 +164,66 @@ export function matchBrokerFees(
 
   return { matched, unmatched, newListingTotal, relistTotal, unmatchedTotal };
 }
+
+/**
+ * Estimates the character's actual effective broker fee rate from their own
+ * paid-fee history, instead of requiring it to be known/passed in. No game-
+ * mechanics formula involved (base%, Broker Relations skill, standings) —
+ * those can drift with balance patches and need their own ESI scope
+ * (standings) this server doesn't currently request. Instead: find fee/order
+ * pairs that are unambiguous on their own terms (exactly one order near the
+ * fee, and that order isn't itself competing for another nearby fee), derive
+ * the observed rate for each, and take the median — self-correcting if
+ * skills or standings ever change, with no formula to keep in sync.
+ */
+
+// Tighter than the general matching window in matchBrokerFees — here we only
+// want near-certain 1:1 pairs to trust as ground truth, not merely plausible ones.
+const RATE_ESTIMATION_TIME_TOLERANCE_MS = 5_000;
+const MIN_SAMPLES_FOR_ESTIMATE = 3;
+
+export interface FeeRateObservation {
+  orderId: number;
+  observedPct: number;
+}
+
+export interface FeeRateEstimate {
+  estimatedPct: number | null;
+  sampleCount: number;
+  observations: FeeRateObservation[];
+}
+
+export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord[]): FeeRateEstimate {
+  const observations: FeeRateObservation[] = [];
+
+  for (const fee of fees) {
+    const feeTime = new Date(fee.date).getTime();
+    const nearbyOrders = orders.filter(
+      (o) => Math.abs(feeTime - new Date(o.issued).getTime()) <= RATE_ESTIMATION_TIME_TOLERANCE_MS
+    );
+    if (nearbyOrders.length !== 1) continue;
+
+    const order = nearbyOrders[0];
+    const orderTime = new Date(order.issued).getTime();
+    const nearbyFees = fees.filter(
+      (f) => Math.abs(new Date(f.date).getTime() - orderTime) <= RATE_ESTIMATION_TIME_TOLERANCE_MS
+    );
+    if (nearbyFees.length !== 1) continue;
+
+    const orderValue = order.price * order.volumeTotal;
+    if (orderValue <= 0) continue;
+
+    observations.push({ orderId: order.orderId, observedPct: (Math.abs(fee.amount) / orderValue) * 100 });
+  }
+
+  if (observations.length < MIN_SAMPLES_FOR_ESTIMATE) {
+    return { estimatedPct: null, sampleCount: observations.length, observations };
+  }
+
+  const sorted = [...observations].sort((a, b) => a.observedPct - b.observedPct);
+  const mid = Math.floor(sorted.length / 2);
+  const estimatedPct =
+    sorted.length % 2 === 0 ? (sorted[mid - 1].observedPct + sorted[mid].observedPct) / 2 : sorted[mid].observedPct;
+
+  return { estimatedPct, sampleCount: observations.length, observations };
+}

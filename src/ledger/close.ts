@@ -11,7 +11,7 @@ import {
   type LotState,
   type TransactionInput,
 } from "./fifo.js";
-import { matchBrokerFees, type BrokerFeeEntry, type OrderRecord } from "./fees.js";
+import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "./fees.js";
 
 const DEFAULT_BROKER_FEE_PCT = 1.0;
 
@@ -193,6 +193,8 @@ export interface DailyCloseReport {
   brokerFeesNewListings: number;
   brokerFeesRelisting: number;
   brokerFeesUnmatched: number;
+  /** The rate actually used for order/fee correlation — either what was passed, or derived from history (see flags for which). */
+  brokerFeePctUsed: number;
   realizedPnlNet: number;
   unmatchedSellRevenue: number;
   unmatchedSellQty: number;
@@ -218,7 +220,7 @@ export interface DailyCloseReport {
 export async function runDailyClose(
   characterId: number | undefined,
   closeDate?: string,
-  brokerFeePct: number = DEFAULT_BROKER_FEE_PCT
+  brokerFeePct?: number
 ): Promise<DailyCloseReport> {
   const char = await getActiveCharacter(characterId);
   await syncWalletLedger(char.characterId);
@@ -316,11 +318,37 @@ export async function runDailyClose(
     state: r.state,
   });
 
+  let resolvedBrokerFeePct = brokerFeePct;
+  if (resolvedBrokerFeePct === undefined) {
+    const allFeeRows = db
+      .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
+      .all(char.characterId) as Array<{ id: number; date: string; amount: number | null }>;
+    const allOrderRows = db
+      .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+      .all(char.characterId) as typeof candidateOrderRows;
+
+    const estimate = estimateBrokerFeePct(
+      allFeeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 })),
+      allOrderRows.map(toOrderRecord)
+    );
+    if (estimate.estimatedPct !== null) {
+      resolvedBrokerFeePct = estimate.estimatedPct;
+      flags.push(
+        `broker_fee_pct not provided — derived ${estimate.estimatedPct.toFixed(2)}% from ${estimate.sampleCount} unambiguous historical fee/order pairs. Pass broker_fee_pct explicitly if this looks wrong (e.g. standings or skills recently changed).`
+      );
+    } else {
+      resolvedBrokerFeePct = DEFAULT_BROKER_FEE_PCT;
+      flags.push(
+        `broker_fee_pct not provided and not enough unambiguous fee history yet to derive it (have ${estimate.sampleCount} sample(s)) — using generic default ${DEFAULT_BROKER_FEE_PCT}%, which may misclassify new-listing/relist matches. Pass it explicitly for a reliable split, or re-run once more history is synced.`
+      );
+    }
+  }
+
   const feeMatch = matchBrokerFees(
     feeEntries,
     candidateOrderRows.map(toOrderRecord),
     priorOrderRows.map(toOrderRecord),
-    brokerFeePct
+    resolvedBrokerFeePct
   );
   if (feeMatch.unmatchedTotal > 0 && brokerFees > 0 && feeMatch.unmatchedTotal / brokerFees > 0.2) {
     flags.push(
@@ -444,14 +472,14 @@ export async function runDailyClose(
       realized_revenue, realized_cogs, realized_pnl_gross, sales_tax_paid, broker_fees_paid, realized_pnl_net,
       unmatched_sell_revenue, unmatched_sell_qty, unrealized_pnl, inventory_market_value, escrow_committed,
       opening_nav, closing_nav, non_trading_cashflow, escrow_movement,
-      broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched,
+      broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched, broker_fee_pct_used,
       reconciliation_gap, flags, computed_at
     ) VALUES (
       @characterId, @closeDate, @openingWalletBalance, @closingWalletBalance,
       @realizedRevenue, @realizedCogs, @realizedPnlGross, @salesTaxPaid, @brokerFeesPaid, @realizedPnlNet,
       @unmatchedSellRevenue, @unmatchedSellQty, @unrealizedPnl, @inventoryMarketValue, @escrowCommitted,
       @openingNav, @closingNav, @nonTradingCashflow, @escrowMovement,
-      @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched,
+      @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched, @brokerFeePctUsed,
       @reconciliationGap, @flags, datetime('now')
     )
     ON CONFLICT(character_id, close_date) DO UPDATE SET
@@ -475,6 +503,7 @@ export async function runDailyClose(
       broker_fees_new_listings = excluded.broker_fees_new_listings,
       broker_fees_relisting = excluded.broker_fees_relisting,
       broker_fees_unmatched = excluded.broker_fees_unmatched,
+      broker_fee_pct_used = excluded.broker_fee_pct_used,
       reconciliation_gap = excluded.reconciliation_gap,
       flags = excluded.flags,
       computed_at = datetime('now')`
@@ -491,6 +520,7 @@ export async function runDailyClose(
     brokerFeesNewListings: feeMatch.newListingTotal,
     brokerFeesRelisting: feeMatch.relistTotal,
     brokerFeesUnmatched: feeMatch.unmatchedTotal,
+    brokerFeePctUsed: resolvedBrokerFeePct,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
@@ -520,6 +550,7 @@ export async function runDailyClose(
     brokerFeesNewListings: feeMatch.newListingTotal,
     brokerFeesRelisting: feeMatch.relistTotal,
     brokerFeesUnmatched: feeMatch.unmatchedTotal,
+    brokerFeePctUsed: resolvedBrokerFeePct,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchBrokerFees, type BrokerFeeEntry, type OrderRecord } from "../src/ledger/fees.js";
+import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../src/ledger/fees.js";
 
 const BROKER_PCT = 1.5;
 
@@ -97,5 +97,48 @@ describe("matchBrokerFees", () => {
     expect(result.matched).toHaveLength(2);
     expect(result.matched.find((m) => m.journalId === 16)).toMatchObject({ orderId: 2 });
     expect(result.matched.find((m) => m.journalId === 17)).toMatchObject({ orderId: 1 });
+  });
+});
+
+describe("estimateBrokerFeePct", () => {
+  it("derives the median observed rate from unambiguous 1:1 fee/order pairs", () => {
+    // Three clean, isolated pairs, each a 1.5% fee, well-separated in time so none compete.
+    const orders = [
+      order(1, 100, "2026-08-10T09:00:00Z", 9_000_000, 5), // value 45M, fee 675,000 -> 1.5%
+      order(2, 200, "2026-08-11T09:00:00Z", 3_000_000, 10), // value 30M, fee 450,000 -> 1.5%
+      order(3, 300, "2026-08-12T09:00:00Z", 1_000_000, 4), // value 4M, fee 60,000 -> 1.5%
+    ];
+    const fees = [
+      fee(1, "2026-08-10T09:00:01Z", -675_000),
+      fee(2, "2026-08-11T09:00:01Z", -450_000),
+      fee(3, "2026-08-12T09:00:01Z", -60_000),
+    ];
+    const result = estimateBrokerFeePct(fees, orders);
+    expect(result.sampleCount).toBe(3);
+    expect(result.estimatedPct).toBeCloseTo(1.5, 5);
+  });
+
+  it("excludes pairs where either side has a competing candidate nearby", () => {
+    const cleanOrder = order(1, 100, "2026-08-10T09:00:00Z", 9_000_000, 5); // 1.5%
+    const cleanFee = fee(1, "2026-08-10T09:00:01Z", -675_000);
+    // Two orders placed seconds apart competing for one fee -- ambiguous, must be excluded.
+    const competingA = order(2, 200, "2026-08-11T09:00:00Z", 3_000_000, 10);
+    const competingB = order(3, 300, "2026-08-11T09:00:02Z", 3_000_000, 10);
+    const competingFee = fee(2, "2026-08-11T09:00:01Z", -450_000);
+
+    const result = estimateBrokerFeePct(
+      [cleanFee, competingFee],
+      [cleanOrder, competingA, competingB]
+    );
+    expect(result.sampleCount).toBe(1);
+    expect(result.observations).toEqual([{ orderId: 1, observedPct: 1.5 }]);
+  });
+
+  it("returns null when there aren't enough unambiguous samples yet", () => {
+    const orders = [order(1, 100, "2026-08-10T09:00:00Z", 9_000_000, 5)];
+    const fees = [fee(1, "2026-08-10T09:00:01Z", -675_000)];
+    const result = estimateBrokerFeePct(fees, orders);
+    expect(result.sampleCount).toBe(1);
+    expect(result.estimatedPct).toBeNull();
   });
 });

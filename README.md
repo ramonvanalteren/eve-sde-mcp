@@ -67,6 +67,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
 | `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |
+| `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
 
 ### Killmails (ESI)
 

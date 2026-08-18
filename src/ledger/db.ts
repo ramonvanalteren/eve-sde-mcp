@@ -156,6 +156,7 @@ export function getLedgerDb(): Database.Database {
   ensureColumn(ledgerDb, "daily_closes", "broker_fees_new_listings", "REAL NOT NULL DEFAULT 0");
   ensureColumn(ledgerDb, "daily_closes", "broker_fees_relisting", "REAL NOT NULL DEFAULT 0");
   ensureColumn(ledgerDb, "daily_closes", "broker_fees_unmatched", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(ledgerDb, "daily_closes", "broker_fee_pct_used", "REAL");
 
   return ledgerDb;
 }

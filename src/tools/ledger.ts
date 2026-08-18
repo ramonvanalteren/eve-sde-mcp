@@ -5,6 +5,7 @@ import { enrichTypeName, jsonResult } from "../utils.js";
 import { syncWalletLedger } from "../ledger/sync.js";
 import { runDailyClose, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
 import { getLedgerDb } from "../ledger/db.js";
+import { estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../ledger/fees.js";
 
 export function registerLedgerTools(server: McpServer): void {
   server.tool(
@@ -25,11 +26,50 @@ export function registerLedgerTools(server: McpServer): void {
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today. Use a past date to backfill a day you missed."),
-      broker_fee_pct: z.number().default(1.0).describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). Pass explicitly; the default is generic and will misclassify matches if it doesn't match the character's real rate."),
+      broker_fee_pct: z.number().optional().describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). If omitted, it's auto-derived from the character's own already-synced fee/order history (see get_effective_broker_fee_pct); the close's flags say which happened. Prefer passing it explicitly once you know the character's real rate."),
     },
     async ({ character_id, close_date, broker_fee_pct }) => {
       const report = await runDailyClose(character_id, close_date, broker_fee_pct);
       return jsonResult(report);
+    }
+  );
+
+  server.tool(
+    "get_effective_broker_fee_pct",
+    "Estimate the authenticated character's actual effective broker fee percentage from their own paid-fee history, without relying on the game's skill/standings formula (which would need a new ESI scope this server doesn't request). Finds unambiguous 1:1 pairs between brokers_fee journal entries and the order that caused them, and returns the median observed rate. Returns null if there isn't enough unambiguous history yet — run sync_wallet_ledger first, or place a few more orders and try again.",
+    {
+      character_id: z.number().describe("Character ID"),
+    },
+    async ({ character_id }) => {
+      const db = getLedgerDb();
+      const feeRows = db
+        .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
+        .all(character_id) as Array<{ id: number; date: string; amount: number | null }>;
+      const orderRows = db
+        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+        .all(character_id) as Array<{
+        order_id: number;
+        type_id: number;
+        is_buy_order: number;
+        price: number;
+        volume_total: number;
+        issued: string;
+        state: OrderRecord["state"];
+      }>;
+
+      const fees: BrokerFeeEntry[] = feeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
+      const orders: OrderRecord[] = orderRows.map((r) => ({
+        orderId: r.order_id,
+        typeId: r.type_id,
+        isBuyOrder: r.is_buy_order === 1,
+        price: r.price,
+        volumeTotal: r.volume_total,
+        issued: r.issued,
+        state: r.state,
+      }));
+
+      const estimate = estimateBrokerFeePct(fees, orders);
+      return jsonResult(estimate);
     }
   );
 
