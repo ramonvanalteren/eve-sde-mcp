@@ -64,6 +64,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
 | `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L (broker fees split into new-listing vs. relisting) |
+| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
 | `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |

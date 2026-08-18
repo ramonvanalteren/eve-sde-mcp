@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
 import { syncWalletLedger } from "../ledger/sync.js";
-import { runDailyClose, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
+import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
 import { getLedgerDb } from "../ledger/db.js";
 import { estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../ledger/fees.js";
 
@@ -31,6 +31,22 @@ export function registerLedgerTools(server: McpServer): void {
     async ({ character_id, close_date, broker_fee_pct }) => {
       const report = await runDailyClose(character_id, close_date, broker_fee_pct);
       return jsonResult(report);
+    }
+  );
+
+  server.tool(
+    "get_daily_close_by_position",
+    "Per-position variant of run_daily_close: same day-close, but realized P&L, allocated sales tax, matched broker fees, and (today only) unrealized mark-to-market are grouped by item type_id instead of summed into one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly, no need to call run_daily_close first) but doesn't persist the breakdown separately — it's recomputed on demand from the same permanent ledger data each time. Sales tax has no per-item ESI linkage, but since it's a flat rate on sell value (not item-specific), it's allocated exactly by each position's revenue share, not estimated. Broker fees only include what matchBrokerFees could confidently attribute (see run_daily_close) — unattributed fees aren't split across positions.",
+    {
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today."),
+      broker_fee_pct: z.number().optional().describe("Same as run_daily_close — omit to auto-derive from history."),
+    },
+    async ({ character_id, close_date, broker_fee_pct }) => {
+      const report = await runDailyClosePerPosition(character_id, close_date, broker_fee_pct);
+      const db = getDatabase();
+      const positions = report.positions.map((p) => ({ typeName: enrichTypeName(db, p.typeId), ...p }));
+      return jsonResult({ ...report, positions });
     }
   );
 

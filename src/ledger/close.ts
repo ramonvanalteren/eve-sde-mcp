@@ -12,6 +12,7 @@ import {
   type TransactionInput,
 } from "./fifo.js";
 import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "./fees.js";
+import { buildPositionCloses, type PositionConsumption, type PositionClose } from "./positions.js";
 
 const DEFAULT_BROKER_FEE_PCT = 1.0;
 
@@ -563,6 +564,149 @@ export async function runDailyClose(
     escrowMovement: escrowMovementToday,
     reconciliationGap,
     flags,
+  };
+}
+
+export interface PerPositionCloseReport {
+  characterId: number;
+  characterName: string;
+  closeDate: string;
+  isToday: boolean;
+  brokerFeePctUsed: number;
+  positions: PositionClose[];
+  flags: string[];
+}
+
+/**
+ * Per-position breakdown of a day-close: realized P&L, allocated sales tax,
+ * and matched broker fees grouped by type_id, plus unrealized mark-to-market
+ * for currently-held positions (today only, same limitation as the
+ * portfolio-level close). Not separately persisted — it's a deterministic
+ * view recomputed on demand from the same permanently-stored ledger data
+ * (lot_consumptions, orders, wallet_journal) the aggregate close uses, so
+ * there's nothing to gain from storing it twice.
+ *
+ * Always runs the aggregate close first (same sync + FIFO application, and
+ * to resolve brokerFeePctUsed consistently) — calling this alone is
+ * sufficient, no need to call run_daily_close separately first.
+ */
+export async function runDailyClosePerPosition(
+  characterId: number | undefined,
+  closeDate?: string,
+  brokerFeePct?: number
+): Promise<PerPositionCloseReport> {
+  const aggregate = await runDailyClose(characterId, closeDate, brokerFeePct);
+  const db = getLedgerDb();
+  const { start, end } = dayRange(aggregate.closeDate);
+
+  const consumptionRows = db
+    .prepare(
+      `SELECT type_id, quantity, unit_cost, unit_sell_price, unmatched
+       FROM lot_consumptions WHERE character_id = ? AND date >= ? AND date < ?`
+    )
+    .all(aggregate.characterId, start, end) as Array<{
+    type_id: number;
+    quantity: number;
+    unit_cost: number | null;
+    unit_sell_price: number;
+    unmatched: number;
+  }>;
+  const consumptions: PositionConsumption[] = consumptionRows.map((r) => ({
+    typeId: r.type_id,
+    quantity: r.quantity,
+    unitCost: r.unit_cost,
+    unitSellPrice: r.unit_sell_price,
+    unmatched: r.unmatched === 1,
+  }));
+
+  const feeEntries: BrokerFeeEntry[] = (
+    db
+      .prepare(
+        `SELECT id, date, amount FROM wallet_journal
+         WHERE character_id = ? AND ref_type = 'brokers_fee' AND date >= ? AND date < ?`
+      )
+      .all(aggregate.characterId, start, end) as Array<{ id: number; date: string; amount: number | null }>
+  ).map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
+
+  const candidateOrderRows = db
+    .prepare(
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+       FROM orders WHERE character_id = ? AND issued >= ? AND issued < ?`
+    )
+    .all(aggregate.characterId, start, end) as Array<{
+    order_id: number;
+    type_id: number;
+    is_buy_order: number;
+    price: number;
+    volume_total: number;
+    issued: string;
+    state: OrderRecord["state"];
+  }>;
+  const priorOrderRows = db
+    .prepare(
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+       FROM orders WHERE character_id = ? AND state = 'cancelled' AND issued < ?`
+    )
+    .all(aggregate.characterId, end) as typeof candidateOrderRows;
+
+  const toOrderRecord = (r: (typeof candidateOrderRows)[number]): OrderRecord => ({
+    orderId: r.order_id,
+    typeId: r.type_id,
+    isBuyOrder: r.is_buy_order === 1,
+    price: r.price,
+    volumeTotal: r.volume_total,
+    issued: r.issued,
+    state: r.state,
+  });
+
+  const feeMatch = matchBrokerFees(
+    feeEntries,
+    candidateOrderRows.map(toOrderRecord),
+    priorOrderRows.map(toOrderRecord),
+    aggregate.brokerFeePctUsed
+  );
+
+  let unrealizedByType: ReturnType<typeof computeUnrealized>["perType"] = [];
+  if (aggregate.isToday) {
+    const lotRows = db
+      .prepare(
+        `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost
+         FROM lots WHERE character_id = ? AND remaining_qty > 0`
+      )
+      .all(aggregate.characterId) as Array<{
+      buy_transaction_id: number;
+      type_id: number;
+      date: string;
+      original_qty: number;
+      remaining_qty: number;
+      unit_cost: number;
+    }>;
+    const lots: LotState[] = lotRows.map((r) => ({
+      buyTransactionId: r.buy_transaction_id,
+      typeId: r.type_id,
+      date: r.date,
+      originalQty: r.original_qty,
+      remainingQty: r.remaining_qty,
+      unitCost: r.unit_cost,
+    }));
+    const typeIds = [...new Set(lots.map((l) => l.typeId))];
+    // Same ESI calls the aggregate close just made for the same type_ids —
+    // effectively free, they hit the response cache (ESI_CACHE_TTL) rather
+    // than round-tripping again.
+    const bids = await fetchBestBids(typeIds);
+    unrealizedByType = computeUnrealized(lots, (typeId) => bids.get(typeId)).perType;
+  }
+
+  const positions = buildPositionCloses(consumptions, feeMatch.matched, aggregate.salesTaxPaid, unrealizedByType);
+
+  return {
+    characterId: aggregate.characterId,
+    characterName: aggregate.characterName,
+    closeDate: aggregate.closeDate,
+    isToday: aggregate.isToday,
+    brokerFeePctUsed: aggregate.brokerFeePctUsed,
+    positions,
+    flags: aggregate.flags,
   };
 }
 
