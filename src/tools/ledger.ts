@@ -9,7 +9,7 @@ import { getLedgerDb } from "../ledger/db.js";
 export function registerLedgerTools(server: McpServer): void {
   server.tool(
     "sync_wallet_ledger",
-    "Pull the authenticated character's full available wallet journal + transaction history from ESI and persist it into the local ledger. ESI only retains ~30 days of wallet history — anything not synced before it ages out is permanently unrecoverable, so this must run at least every couple of weeks (daily via run_daily_close is the normal way to do it) to keep the accounting ledger complete. Safe to call repeatedly; already-seen entries are no-ops.",
+    "Pull the authenticated character's full available wallet journal + transaction + order history from ESI and persist it into the local ledger. ESI only retains ~30 days of wallet history and ~90 days of order history — anything not synced before it ages out is permanently unrecoverable, so this must run at least every couple of weeks (daily via run_daily_close is the normal way to do it) to keep the accounting ledger complete. Safe to call repeatedly; already-seen entries are no-ops.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
     },
@@ -21,13 +21,14 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "run_daily_close",
-    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger, applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
+    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Broker fees are further split into new-listing vs. relisting fees by correlating brokers_fee journal entries against order timestamps — this is a best-effort match (ESI gives no direct order/fee linkage), so brokerFeesUnmatched covers whatever couldn't be confidently attributed; brokerFeesPaid itself stays exact regardless. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today. Use a past date to backfill a day you missed."),
+      broker_fee_pct: z.number().default(1.0).describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). Pass explicitly; the default is generic and will misclassify matches if it doesn't match the character's real rate."),
     },
-    async ({ character_id, close_date }) => {
-      const report = await runDailyClose(character_id, close_date);
+    async ({ character_id, close_date, broker_fee_pct }) => {
+      const report = await runDailyClose(character_id, close_date, broker_fee_pct);
       return jsonResult(report);
     }
   );

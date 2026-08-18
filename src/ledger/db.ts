@@ -119,6 +119,30 @@ export function getLedgerDb(): Database.Database {
       PRIMARY KEY (character_id, close_date)
     );
 
+    -- Orders, both currently open and historical (cancelled/expired/fulfilled).
+    -- Kept locally because /orders/history/ is itself capped at ~90 days on
+    -- ESI's end, and this is the data relist/new-listing fee correlation
+    -- depends on (see src/ledger/fees.ts) -- without a permanent local copy,
+    -- the correlation would only ever work within that live window.
+    CREATE TABLE IF NOT EXISTS orders (
+      order_id INTEGER PRIMARY KEY,
+      character_id INTEGER NOT NULL,
+      type_id INTEGER NOT NULL,
+      is_buy_order INTEGER NOT NULL,
+      price REAL NOT NULL,
+      volume_total INTEGER NOT NULL,
+      volume_remain INTEGER,
+      location_id INTEGER,
+      region_id INTEGER,
+      issued TEXT NOT NULL,
+      duration INTEGER,
+      state TEXT NOT NULL,
+      escrow REAL,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_orders_character_type ON orders(character_id, type_id, issued);
+    CREATE INDEX IF NOT EXISTS idx_orders_character_issued ON orders(character_id, issued);
+
     CREATE TABLE IF NOT EXISTS sync_state (
       character_id INTEGER PRIMARY KEY,
       last_synced_at TEXT,
@@ -129,6 +153,9 @@ export function getLedgerDb(): Database.Database {
 
   // Migrations for columns added after the table already existed on disk.
   ensureColumn(ledgerDb, "daily_closes", "escrow_movement", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(ledgerDb, "daily_closes", "broker_fees_new_listings", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(ledgerDb, "daily_closes", "broker_fees_relisting", "REAL NOT NULL DEFAULT 0");
+  ensureColumn(ledgerDb, "daily_closes", "broker_fees_unmatched", "REAL NOT NULL DEFAULT 0");
 
   return ledgerDb;
 }

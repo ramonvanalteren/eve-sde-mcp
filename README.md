@@ -58,12 +58,12 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 
 ### Accounting Ledger (local)
 
-ESI's wallet journal and transaction history only cover a rolling ~30 days — these tools persist synced data permanently in a local SQLite ledger (`~/.eve-sde/ledger.db`) so realized P&L, FIFO cost basis, and daily closes survive past that window.
+ESI's wallet journal/transactions only cover a rolling ~30 days and order history ~90 days — these tools persist synced data permanently in a local SQLite ledger (`~/.eve-sde/ledger.db`) so realized P&L, FIFO cost basis, daily closes, and relisting-fee correlation all survive past those windows.
 
 | Tool | Description |
 |------|-------------|
-| `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions into the local ledger |
-| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L |
+| `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L (broker fees split into new-listing vs. relisting) |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
 | `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |

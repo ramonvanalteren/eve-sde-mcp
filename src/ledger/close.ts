@@ -11,6 +11,9 @@ import {
   type LotState,
   type TransactionInput,
 } from "./fifo.js";
+import { matchBrokerFees, type BrokerFeeEntry, type OrderRecord } from "./fees.js";
+
+const DEFAULT_BROKER_FEE_PCT = 1.0;
 
 const JITA_TRADE_HUB = 60003760;
 const THE_FORGE = 10000002;
@@ -186,6 +189,10 @@ export interface DailyCloseReport {
   realizedPnlGross: number;
   salesTaxPaid: number;
   brokerFeesPaid: number;
+  /** Best-effort split of brokerFeesPaid by cause — see fees.ts for the matching caveats. Adds up to less than brokerFeesPaid when some fees couldn't be confidently matched (brokerFeesUnmatched covers the gap). */
+  brokerFeesNewListings: number;
+  brokerFeesRelisting: number;
+  brokerFeesUnmatched: number;
   realizedPnlNet: number;
   unmatchedSellRevenue: number;
   unmatchedSellQty: number;
@@ -208,7 +215,11 @@ export interface DailyCloseReport {
  * close_date is today — a past-dated close carries realized figures only,
  * with a flag explaining why unrealized is null.
  */
-export async function runDailyClose(characterId: number | undefined, closeDate?: string): Promise<DailyCloseReport> {
+export async function runDailyClose(
+  characterId: number | undefined,
+  closeDate?: string,
+  brokerFeePct: number = DEFAULT_BROKER_FEE_PCT
+): Promise<DailyCloseReport> {
   const char = await getActiveCharacter(characterId);
   await syncWalletLedger(char.characterId);
   applyPendingFifo(char.characterId);
@@ -249,8 +260,8 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
   }
 
   const journalRows = db
-    .prepare(`SELECT ref_type, amount FROM wallet_journal WHERE character_id = ? AND date >= ? AND date < ?`)
-    .all(char.characterId, start, end) as Array<{ ref_type: string; amount: number | null }>;
+    .prepare(`SELECT id, date, ref_type, amount FROM wallet_journal WHERE character_id = ? AND date >= ? AND date < ?`)
+    .all(char.characterId, start, end) as Array<{ id: number; date: string; ref_type: string; amount: number | null }>;
   const { brokerFees, salesTax } = summarizeFeesAndTax(
     journalRows.map((r) => ({ refType: r.ref_type, amount: r.amount ?? 0 }))
   );
@@ -266,6 +277,56 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
   // Deliberately not pushed to `flags` — routine order placement/reissue
   // shouldn't compete with genuine anomalies for attention. It's still
   // reported, just as a plain figure rather than something to investigate.
+
+  // Correlate brokers_fee entries to the order that caused them (heuristic —
+  // see fees.ts for why ESI leaves us no direct linkage) to split new-listing
+  // fees from relisting fees.
+  const feeEntries: BrokerFeeEntry[] = journalRows
+    .filter((r) => r.ref_type === "brokers_fee")
+    .map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
+
+  const candidateOrderRows = db
+    .prepare(
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+       FROM orders WHERE character_id = ? AND issued >= ? AND issued < ?`
+    )
+    .all(char.characterId, start, end) as Array<{
+    order_id: number;
+    type_id: number;
+    is_buy_order: number;
+    price: number;
+    volume_total: number;
+    issued: string;
+    state: OrderRecord["state"];
+  }>;
+  const priorOrderRows = db
+    .prepare(
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+       FROM orders WHERE character_id = ? AND state = 'cancelled' AND issued < ?`
+    )
+    .all(char.characterId, end) as typeof candidateOrderRows;
+
+  const toOrderRecord = (r: (typeof candidateOrderRows)[number]): OrderRecord => ({
+    orderId: r.order_id,
+    typeId: r.type_id,
+    isBuyOrder: r.is_buy_order === 1,
+    price: r.price,
+    volumeTotal: r.volume_total,
+    issued: r.issued,
+    state: r.state,
+  });
+
+  const feeMatch = matchBrokerFees(
+    feeEntries,
+    candidateOrderRows.map(toOrderRecord),
+    priorOrderRows.map(toOrderRecord),
+    brokerFeePct
+  );
+  if (feeMatch.unmatchedTotal > 0 && brokerFees > 0 && feeMatch.unmatchedTotal / brokerFees > 0.2) {
+    flags.push(
+      `${feeMatch.unmatchedTotal.toFixed(0)} of ${brokerFees.toFixed(0)} ISK in broker fees today couldn't be confidently matched to a specific order (no close-enough candidate, or two orders too close to call) — new-listing/relist split below is incomplete; the total broker_fees_paid figure is still exact.`
+    );
+  }
 
   const realizedPnlNet = realized.grossPnl - brokerFees - salesTax;
 
@@ -382,12 +443,16 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
       character_id, close_date, opening_wallet_balance, closing_wallet_balance,
       realized_revenue, realized_cogs, realized_pnl_gross, sales_tax_paid, broker_fees_paid, realized_pnl_net,
       unmatched_sell_revenue, unmatched_sell_qty, unrealized_pnl, inventory_market_value, escrow_committed,
-      opening_nav, closing_nav, non_trading_cashflow, escrow_movement, reconciliation_gap, flags, computed_at
+      opening_nav, closing_nav, non_trading_cashflow, escrow_movement,
+      broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched,
+      reconciliation_gap, flags, computed_at
     ) VALUES (
       @characterId, @closeDate, @openingWalletBalance, @closingWalletBalance,
       @realizedRevenue, @realizedCogs, @realizedPnlGross, @salesTaxPaid, @brokerFeesPaid, @realizedPnlNet,
       @unmatchedSellRevenue, @unmatchedSellQty, @unrealizedPnl, @inventoryMarketValue, @escrowCommitted,
-      @openingNav, @closingNav, @nonTradingCashflow, @escrowMovement, @reconciliationGap, @flags, datetime('now')
+      @openingNav, @closingNav, @nonTradingCashflow, @escrowMovement,
+      @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched,
+      @reconciliationGap, @flags, datetime('now')
     )
     ON CONFLICT(character_id, close_date) DO UPDATE SET
       opening_wallet_balance = excluded.opening_wallet_balance,
@@ -407,6 +472,9 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
       closing_nav = excluded.closing_nav,
       non_trading_cashflow = excluded.non_trading_cashflow,
       escrow_movement = excluded.escrow_movement,
+      broker_fees_new_listings = excluded.broker_fees_new_listings,
+      broker_fees_relisting = excluded.broker_fees_relisting,
+      broker_fees_unmatched = excluded.broker_fees_unmatched,
       reconciliation_gap = excluded.reconciliation_gap,
       flags = excluded.flags,
       computed_at = datetime('now')`
@@ -420,6 +488,9 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
     realizedPnlGross: realized.grossPnl,
     salesTaxPaid: salesTax,
     brokerFeesPaid: brokerFees,
+    brokerFeesNewListings: feeMatch.newListingTotal,
+    brokerFeesRelisting: feeMatch.relistTotal,
+    brokerFeesUnmatched: feeMatch.unmatchedTotal,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
@@ -446,6 +517,9 @@ export async function runDailyClose(characterId: number | undefined, closeDate?:
     realizedPnlGross: realized.grossPnl,
     salesTaxPaid: salesTax,
     brokerFeesPaid: brokerFees,
+    brokerFeesNewListings: feeMatch.newListingTotal,
+    brokerFeesRelisting: feeMatch.relistTotal,
+    brokerFeesUnmatched: feeMatch.unmatchedTotal,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,

@@ -28,6 +28,24 @@ interface EsiTransaction {
   journal_ref_id: number;
 }
 
+interface EsiOpenOrder {
+  order_id: number;
+  type_id: number;
+  location_id: number;
+  region_id?: number;
+  volume_total: number;
+  volume_remain: number;
+  price: number;
+  is_buy_order: boolean;
+  issued: string;
+  duration: number;
+  escrow?: number;
+}
+
+interface EsiHistoricalOrder extends EsiOpenOrder {
+  state: "cancelled" | "expired" | "fulfilled";
+}
+
 // ESI's wallet history is bounded to ~30 days regardless of how far back we
 // walk, so this is a safety valve against a runaway loop, not the real limit.
 const MAX_TRANSACTION_PAGES = 20;
@@ -72,23 +90,30 @@ export interface SyncResult {
   transactionsInserted: number;
   journalSeen: number;
   transactionsSeen: number;
+  ordersUpserted: number;
 }
 
 /**
- * Pull everything ESI currently has for journal + transactions and upsert
- * (INSERT OR IGNORE, keyed by ESI's own ids) into the local ledger. Safe to
- * call repeatedly — already-seen rows are no-ops. This is the only way to
- * retain history past ESI's ~30-day rolling window; anything not synced
- * before it ages out is gone for good.
+ * Pull everything ESI currently has for journal + transactions + orders and
+ * upsert into the local ledger. Safe to call repeatedly — already-seen rows
+ * are no-ops (journal/transactions) or cheap overwrites (orders, since an
+ * open order's volume_remain and eventual state change over time). This is
+ * the only way to retain history past ESI's rolling windows (~30 days for
+ * wallet data, ~90 for order history) — anything not synced before it ages
+ * out is gone for good.
  */
 export async function syncWalletLedger(characterId?: number): Promise<SyncResult> {
   const char = await getActiveCharacter(characterId);
 
-  const [journal, transactions] = await Promise.all([
+  const [journal, transactions, openOrders, orderHistory] = await Promise.all([
     esiGetAll<EsiWalletJournalEntry>(`/characters/${char.characterId}/wallet/journal/`, {
       characterId: char.characterId,
     }),
     fetchAllTransactions(char.characterId),
+    esiGetAll<EsiOpenOrder>(`/characters/${char.characterId}/orders/`, { characterId: char.characterId }),
+    esiGetAll<EsiHistoricalOrder>(`/characters/${char.characterId}/orders/history/`, {
+      characterId: char.characterId,
+    }),
   ]);
 
   const db = getLedgerDb();
@@ -103,6 +128,17 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
       (transaction_id, character_id, date, type_id, quantity, unit_price, is_buy, location_id, client_id, journal_ref_id)
     VALUES (@transactionId, @characterId, @date, @typeId, @quantity, @unitPrice, @isBuy, @locationId, @clientId, @journalRefId)
   `);
+  const upsertOrder = db.prepare(`
+    INSERT INTO orders
+      (order_id, character_id, type_id, is_buy_order, price, volume_total, volume_remain, location_id, region_id, issued, duration, state, escrow, synced_at)
+    VALUES
+      (@orderId, @characterId, @typeId, @isBuyOrder, @price, @volumeTotal, @volumeRemain, @locationId, @regionId, @issued, @duration, @state, @escrow, datetime('now'))
+    ON CONFLICT(order_id) DO UPDATE SET
+      volume_remain = excluded.volume_remain,
+      state = excluded.state,
+      escrow = excluded.escrow,
+      synced_at = datetime('now')
+  `);
   const upsertSyncState = db.prepare(`
     INSERT INTO sync_state (character_id, last_synced_at, journal_entries, transactions)
     VALUES (@characterId, datetime('now'), @journalEntries, @transactions)
@@ -114,6 +150,7 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
 
   let journalInserted = 0;
   let transactionsInserted = 0;
+  let ordersUpserted = 0;
 
   db.transaction(() => {
     for (const entry of journal) {
@@ -148,6 +185,42 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
       });
       transactionsInserted += res.changes;
     }
+    for (const o of openOrders) {
+      upsertOrder.run({
+        orderId: o.order_id,
+        characterId: char.characterId,
+        typeId: o.type_id,
+        isBuyOrder: o.is_buy_order ? 1 : 0,
+        price: o.price,
+        volumeTotal: o.volume_total,
+        volumeRemain: o.volume_remain,
+        locationId: o.location_id ?? null,
+        regionId: o.region_id ?? null,
+        issued: o.issued,
+        duration: o.duration ?? null,
+        state: "open",
+        escrow: o.escrow ?? null,
+      });
+      ordersUpserted++;
+    }
+    for (const o of orderHistory) {
+      upsertOrder.run({
+        orderId: o.order_id,
+        characterId: char.characterId,
+        typeId: o.type_id,
+        isBuyOrder: o.is_buy_order ? 1 : 0,
+        price: o.price,
+        volumeTotal: o.volume_total,
+        volumeRemain: o.volume_remain,
+        locationId: o.location_id ?? null,
+        regionId: o.region_id ?? null,
+        issued: o.issued,
+        duration: o.duration ?? null,
+        state: o.state,
+        escrow: o.escrow ?? null,
+      });
+      ordersUpserted++;
+    }
     upsertSyncState.run({
       characterId: char.characterId,
       journalEntries: journalInserted,
@@ -162,5 +235,6 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
     transactionsInserted,
     journalSeen: journal.length,
     transactionsSeen: transactions.length,
+    ordersUpserted,
   };
 }
