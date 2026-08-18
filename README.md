@@ -56,6 +56,18 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `get_structure_orders` | Orders in a player-owned structure (authenticated) |
 | `get_market_types` | List type IDs with active orders in a region (public) |
 
+### Accounting Ledger (local)
+
+ESI's wallet journal and transaction history only cover a rolling ~30 days — these tools persist synced data permanently in a local SQLite ledger (`~/.eve-sde/ledger.db`) so realized P&L, FIFO cost basis, and daily closes survive past that window.
+
+| Tool | Description |
+|------|-------------|
+| `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions into the local ledger |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L |
+| `get_daily_close` | Read a previously computed close for one date |
+| `get_close_range` | Read a range of computed closes, with summed totals |
+| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |
+
 ### Killmails (ESI)
 
 | Tool | Description |

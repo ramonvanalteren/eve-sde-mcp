@@ -15,6 +15,7 @@ This skill covers five workflows. A plain "portfolio review" request runs Workfl
 4. **Inventory risk** (Workflow 4) — hangar stock with no matching sell order at all; mandatory every review.
 5. **Pipeline performance** (Workflow 5) — how fast capital is actually cycling through buy→fill→list→sell, synthesized from data already gathered in Workflows 2-4. This is the default closing step of every portfolio review: healthy margin on a slow-cycling position can still be worse than a thinner margin that turns over fast, and nothing else in this skill surfaces that trade-off.
 6. **Combined capital allocation** (default, runs automatically whenever both Workflow 1 and a portfolio review ran in the same session) — merge Increase/Hold/New into one ranked, sized list against current wallet balance. See the dedicated section below.
+7. **Daily close** (Workflow 6) — an accounting day-close: realized vs unrealized P&L, net of actual broker fees and sales tax, with a permanent local ledger. Separate from a portfolio review — runs only when explicitly asked for ("daily close", "close today", "P&L for [period]") or as a deliberate end-of-day routine, not bundled into the default Workflow 2-5 chain.
 
 **Explicitly out of scope:** checking whether existing orders have been undercut/outbid and need repricing. That's faster to handle live in the client or with dedicated repricing tools. Do not spend ESI calls verifying top-of-book position for orders already open — only use live ESI to validate NEW candidates and to size/kill decisions on the portfolio (per the rules below).
 
@@ -123,6 +124,26 @@ Fills convert escrow into hangar stock, and that stock is real financial exposur
 4. **Don't present a full table for every item every time** — that's noise, not insight. Rank by slowest stage *relative to that item's typical liquidity* (a thin item sitting unsold for 3 days isn't news; a deep 80-order-book item sitting unsold for 3 days is a real signal) and surface only the 2-3 clearest outliers.
 5. For each outlier, state the actionable read directly: is the margin good enough to justify the wait, or would that capital earn more cycling through something faster even at a lower headline margin? This is a judgment call to present, not a hard rule — but always frame it in terms of capital efficiency (ISK/day), not margin alone.
 6. If nothing stands out as a clear outlier this review, say so briefly rather than manufacturing a table — this step should feel like a genuine insight when it fires, not routine filler.
+
+## Workflow 6: Daily close (accounting)
+
+This is a distinct deliverable from a portfolio review — a real day-close, in the sense a daytrading desk would run one: realized P&L (booked, cash-true) separated from unrealized P&L (mark-to-market on what's still held), with fees and tax as their own expense line rather than folded into a margin percentage. It runs on its own ledger (`~/.eve-sde/ledger.db`), not just live ESI calls, because **ESI's wallet journal and transaction history only cover a rolling ~30 days** — anything not synced before it ages out is gone permanently, with no way to recover it later, even from CCP support. Trigger this workflow explicitly ("daily close", "close today", "P&L for this week/month") — don't run it as part of a default portfolio review.
+
+Tools: `sync_wallet_ledger`, `run_daily_close`, `get_daily_close`, `get_close_range`, `get_open_lots`.
+
+1. **Run the close**: call `run_daily_close` (defaults to today, UTC). This syncs the ledger first, so it's always safe to run even after a gap — but the longer the gap, the more likely something aged out of ESI's 30-day window before ever being synced (check `get_close_range` for missing dates and say so plainly if there's a hole).
+2. **Cost basis is strict FIFO here, not the bounded-weighted-average used in Workflow 3.** Workflow 3 reconstructs cost basis on demand from whatever `get_wallet_transactions` returns that day (necessarily approximate, since ESI's window is short). The ledger instead records every synced transaction permanently and consumes lots oldest-first as sells happen — more precise, and it's what makes a real day-close possible at all. Don't be confused seeing two different cost-basis methods in the same skill; they're solving different problems (a quick live check vs. a persistent accounting record).
+3. **Present the report as an actual close, top to bottom**:
+   - Opening NAV → Realized P&L (revenue − COGS = gross; minus **actual** broker fees and sales tax pulled from the wallet journal, not an estimated percentage — this is what makes relisting costs visible, since every relist is its own real `brokers_fee` entry) → Unrealized P&L (mark-to-market on current open lots at Jita best bid, **only computed for today** — a backfilled past date gets realized figures only, say so explicitly) → Closing NAV.
+   - NAV = wallet balance + buy-order escrow + inventory marked to market.
+4. **Flags are the point — don't bury them in the numbers.** `run_daily_close` surfaces, as an explicit list:
+   - Sells with no matching lot (**unmatched cost basis** — pre-dates the ledger, or arrived via loot/reward/contract/corp transfer rather than a market buy). These are excluded from realized P&L rather than costed at a guess; report the revenue separately and say plainly it's not included in P&L.
+   - Live-asset quantity vs. ledger lot quantity mismatches per item — the ledger's view of "what's held" can drift from reality (manufacturing, contracts, item movement), and this is where that shows up.
+   - Non-trading cashflow (anything in the journal that isn't `market_transaction`/`brokers_fee`/`transaction_tax` — transfers, insurance, contracts) — same caveat as the wallet-reconciliation note elsewhere in this skill: check it before trusting NAV.
+   - A reconciliation gap between expected and actual NAV change since the prior close, when one can be computed.
+5. **Backfilling**: `run_daily_close` accepts `close_date` for a past date to compute realized P&L retroactively from already-synced ledger data (useful if Ramon missed a few days) — but it will not have unrealized/NAV for that date, since mark-to-market needs live prices.
+6. **Period review**: use `get_close_range` for a week/month of already-computed closes rather than re-deriving trend numbers by hand — it also returns summed totals (net realized P&L, fees, tax) across the range.
+7. This workflow does not replace Workflows 2/3's live verification before acting on a position — it's the accounting record of what already happened, not a tool for deciding what to do next. Point Ramon back to a portfolio review for that.
 
 ## Mandatory sizing rule (applies to Workflows 1, 2, and 3)
 
