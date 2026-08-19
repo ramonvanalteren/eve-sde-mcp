@@ -230,8 +230,23 @@ export interface UnrealizedResult {
   perType: UnrealizedPerType[];
 }
 
-/** Marks remaining open lots to market at current best bid (conservative — what you'd actually get selling now). Falls back to cost (0 P&L) when no live price is available, rather than fabricating a gain or loss. */
-export function computeUnrealized(lots: LotState[], bestBid: MarketPriceLookup): UnrealizedResult {
+/**
+ * Marks remaining open lots to market. `marketPrice` should be the net
+ * realizable value per unit — i.e. best sell price, net of sales tax — not
+ * the buy-side bid. Every lot here comes from an actually-filled buy
+ * transaction (see applyFifo: a lot is only ever created from `tx.isBuy`),
+ * so a lot always represents already-owned inventory, never an open/unfilled
+ * buy order still accumulating — there is no "which side is this position
+ * on" ambiguity to resolve. The bid price answers "what would it cost to
+ * rebuild this position today," which is irrelevant to inventory already
+ * held; the economically relevant question is "what would selling this
+ * actually realize," which is the ask side, net of the tax that sale will
+ * incur. (Confirmed bug: an earlier version marked to bid here, understating
+ * unrealizedPnl by roughly the full bid-ask spread on every held position.)
+ * Falls back to cost (0 P&L) when no live price is available, rather than
+ * fabricating a gain or loss.
+ */
+export function computeUnrealized(lots: LotState[], marketPrice: MarketPriceLookup): UnrealizedResult {
   const byType = new Map<number, { qty: number; cost: number }>();
   for (const lot of lots) {
     if (lot.remainingQty <= 0) continue;
@@ -246,9 +261,9 @@ export function computeUnrealized(lots: LotState[], bestBid: MarketPriceLookup):
   let totalMarketValue = 0;
 
   for (const [typeId, { qty, cost }] of byType) {
-    const bid = bestBid(typeId);
-    const priceMissing = bid === undefined;
-    const marketValue = priceMissing ? cost : qty * bid;
+    const price = marketPrice(typeId);
+    const priceMissing = price === undefined;
+    const marketValue = priceMissing ? cost : qty * price;
     totalCost += cost;
     totalMarketValue += marketValue;
     perType.push({ typeId, qty, cost, marketValue, unrealizedPnl: marketValue - cost, priceMissing });

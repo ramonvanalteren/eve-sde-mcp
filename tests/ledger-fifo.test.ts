@@ -149,7 +149,7 @@ describe("splitCashflow", () => {
 });
 
 describe("computeUnrealized", () => {
-  it("marks held lots to the current best bid", () => {
+  it("marks held lots to the supplied per-unit market price", () => {
     const lots: LotState[] = [
       { buyTransactionId: 1, typeId: 100, date: "2026-08-01T00:00:00Z", originalQty: 10, remainingQty: 6, unitCost: 1000 },
       { buyTransactionId: 2, typeId: 200, date: "2026-08-01T00:00:00Z", originalQty: 4, remainingQty: 4, unitCost: 500 },
@@ -174,5 +174,23 @@ describe("computeUnrealized", () => {
     const result = computeUnrealized(lots, () => 1200);
     expect(result.perType).toHaveLength(0);
     expect(result.totalMarketValue).toBe(0);
+  });
+
+  it("regression: marks to net sell value, not bid — Angel Brass Tag bug report", () => {
+    // Real numbers from the bug report: 8 units at cost 27,760,000/unit,
+    // bestBuy 27,600,000 (what the buggy version used, giving a false
+    // -1,280,000 loss), bestSell 33,800,000, sales tax 3.4%. close.ts's
+    // fetchNetSellPrices now passes bestSell * (1 - taxPct/100) here, not
+    // bestBuy — verify that produces the reporter's expected +39,126,400.
+    const lots: LotState[] = [
+      { buyTransactionId: 1, typeId: 12345, date: "2026-08-01T00:00:00Z", originalQty: 8, remainingQty: 8, unitCost: 27_760_000 },
+    ];
+    const netSellPrice = 33_800_000 * (1 - 3.4 / 100);
+    const result = computeUnrealized(lots, () => netSellPrice);
+
+    const position = result.perType[0];
+    expect(position.marketValue).toBeCloseTo(8 * 32_650_800, 0);
+    expect(position.unrealizedPnl).toBeCloseTo(39_126_400, 0);
+    expect(position.unrealizedPnl).toBeGreaterThan(0); // the bug flipped this to a loss
   });
 });

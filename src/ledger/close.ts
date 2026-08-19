@@ -15,6 +15,9 @@ import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderR
 import { buildPositionCloses, type PositionConsumption, type PositionClose } from "./positions.js";
 
 const DEFAULT_BROKER_FEE_PCT = 1.0;
+// Matches get_portfolio_margins's own default (Accounting V + no standings);
+// pass explicitly for the character's actual rate, same rule as broker_fee_pct.
+const DEFAULT_SALES_TAX_PCT = 3.6;
 
 const JITA_TRADE_HUB = 60003760;
 const THE_FORGE = 10000002;
@@ -157,25 +160,39 @@ function applyPendingFifo(characterId: number): { transactionsApplied: number; c
   return { transactionsApplied: pendingRows.length, consumptions: result.consumptions.length };
 }
 
-async function fetchBestBids(typeIds: number[]): Promise<Map<number, number>> {
-  const bids = new Map<number, number>();
+/**
+ * Fetches net-realizable sell value per unit for mark-to-market: best sell
+ * (ask) price at Jita, net of sales tax. Every lot in the ledger comes from
+ * an actually-filled buy (see applyFifo) — i.e. already-owned inventory,
+ * never an open/unfilled buy order — so the economically relevant price is
+ * what selling it would realize, not the buy-side bid. (Bug: an earlier
+ * version used bestBuy here, understating unrealized P&L by roughly the
+ * full bid-ask spread on every held position — confirmed on Angel Brass Tag,
+ * where bestBuy/bestSell differed by ~22%.) Broker fee is deliberately not
+ * netted here: it's already a sunk cost once an item is listed (charged at
+ * listing time, in brokerFeesPaid), and for not-yet-listed hangar stock this
+ * is still a reasonable upper-bound estimate rather than a guess at listing
+ * status per position.
+ */
+async function fetchNetSellPrices(typeIds: number[], salesTaxPct: number): Promise<Map<number, number>> {
+  const prices = new Map<number, number>();
   await mapConcurrent(typeIds, MAX_CONCURRENT_ESI, async (typeId) => {
     try {
       const orders = await esiGetAll<EsiOrder>(
-        `/markets/${THE_FORGE}/orders/?type_id=${typeId}&order_type=buy`,
+        `/markets/${THE_FORGE}/orders/?type_id=${typeId}&order_type=sell`,
         { public: true, cacheTtlMs: ESI_CACHE_TTL }
       );
       const atJita = orders.filter((o) => o.location_id === JITA_TRADE_HUB);
-      const best = atJita.reduce<number | undefined>(
-        (max, o) => (max === undefined || o.price > max ? o.price : max),
+      const bestSell = atJita.reduce<number | undefined>(
+        (min, o) => (min === undefined || o.price < min ? o.price : min),
         undefined
       );
-      if (best !== undefined) bids.set(typeId, best);
+      if (bestSell !== undefined) prices.set(typeId, bestSell * (1 - salesTaxPct / 100));
     } catch {
       // leave unset — computeUnrealized falls back to cost basis for missing prices
     }
   });
-  return bids;
+  return prices;
 }
 
 export interface DailyCloseReport {
@@ -221,7 +238,8 @@ export interface DailyCloseReport {
 export async function runDailyClose(
   characterId: number | undefined,
   closeDate?: string,
-  brokerFeePct?: number
+  brokerFeePct?: number,
+  salesTaxPct: number = DEFAULT_SALES_TAX_PCT
 ): Promise<DailyCloseReport> {
   const char = await getActiveCharacter(characterId);
   await syncWalletLedger(char.characterId);
@@ -401,15 +419,15 @@ export async function runDailyClose(
     }));
 
     const typeIds = [...new Set(lots.map((l) => l.typeId))];
-    const bids = await fetchBestBids(typeIds);
-    const unrealized = computeUnrealized(lots, (typeId) => bids.get(typeId));
+    const netSellPrices = await fetchNetSellPrices(typeIds, salesTaxPct);
+    const unrealized = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId));
     unrealizedPnl = unrealized.unrealizedPnl;
     inventoryMarketValue = unrealized.totalMarketValue;
 
     const missingPrices = unrealized.perType.filter((p) => p.priceMissing);
     if (missingPrices.length > 0) {
       flags.push(
-        `No live Jita buy-side price for ${missingPrices.length} held type(s) — valued at cost for this close, not true market value.`
+        `No live Jita sell order for ${missingPrices.length} held type(s) — valued at cost for this close, not true market value.`
       );
     }
 
@@ -593,9 +611,10 @@ export interface PerPositionCloseReport {
 export async function runDailyClosePerPosition(
   characterId: number | undefined,
   closeDate?: string,
-  brokerFeePct?: number
+  brokerFeePct?: number,
+  salesTaxPct: number = DEFAULT_SALES_TAX_PCT
 ): Promise<PerPositionCloseReport> {
-  const aggregate = await runDailyClose(characterId, closeDate, brokerFeePct);
+  const aggregate = await runDailyClose(characterId, closeDate, brokerFeePct, salesTaxPct);
   const db = getLedgerDb();
   const { start, end } = dayRange(aggregate.closeDate);
 
@@ -693,8 +712,8 @@ export async function runDailyClosePerPosition(
     // Same ESI calls the aggregate close just made for the same type_ids —
     // effectively free, they hit the response cache (ESI_CACHE_TTL) rather
     // than round-tripping again.
-    const bids = await fetchBestBids(typeIds);
-    unrealizedByType = computeUnrealized(lots, (typeId) => bids.get(typeId)).perType;
+    const netSellPrices = await fetchNetSellPrices(typeIds, salesTaxPct);
+    unrealizedByType = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId)).perType;
   }
 
   const positions = buildPositionCloses(consumptions, feeMatch.matched, aggregate.salesTaxPaid, unrealizedByType);

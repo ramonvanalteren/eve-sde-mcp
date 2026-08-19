@@ -22,28 +22,30 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "run_daily_close",
-    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Broker fees are further split into new-listing vs. relisting fees by correlating brokers_fee journal entries against order timestamps — this is a best-effort match (ESI gives no direct order/fee linkage), so brokerFeesUnmatched covers whatever couldn't be confidently attributed; brokerFeesPaid itself stays exact regardless. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
+    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Broker fees are further split into new-listing vs. relisting fees by correlating brokers_fee journal entries against order timestamps — this is a best-effort match (ESI gives no direct order/fee linkage), so brokerFeesUnmatched covers whatever couldn't be confidently attributed; brokerFeesPaid itself stays exact regardless. Unrealized P&L marks held inventory to the best SELL price at Jita (net of sales_tax_pct) — every open lot is already-owned inventory from a filled buy, never an unfilled buy order, so bid-side pricing would understate it by the bid-ask spread. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today. Use a past date to backfill a day you missed."),
       broker_fee_pct: z.number().optional().describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). If omitted, it's auto-derived from the character's own already-synced fee/order history (see get_effective_broker_fee_pct); the close's flags say which happened. Prefer passing it explicitly once you know the character's real rate."),
+      sales_tax_pct: z.number().default(3.6).describe("Character's actual effective sales tax percentage (e.g. 3.4 for Accounting V + no standings) — used to net today's unrealized mark-to-market value (best sell price * (1 - this/100)). Pass explicitly; the default is generic."),
     },
-    async ({ character_id, close_date, broker_fee_pct }) => {
-      const report = await runDailyClose(character_id, close_date, broker_fee_pct);
+    async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
+      const report = await runDailyClose(character_id, close_date, broker_fee_pct, sales_tax_pct);
       return jsonResult(report);
     }
   );
 
   server.tool(
     "get_daily_close_by_position",
-    "Per-position variant of run_daily_close: same day-close, but realized P&L, allocated sales tax, matched broker fees, and (today only) unrealized mark-to-market are grouped by item type_id instead of summed into one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly, no need to call run_daily_close first) but doesn't persist the breakdown separately — it's recomputed on demand from the same permanent ledger data each time. Sales tax has no per-item ESI linkage, but since it's a flat rate on sell value (not item-specific), it's allocated exactly by each position's revenue share, not estimated. Broker fees only include what matchBrokerFees could confidently attribute (see run_daily_close) — unattributed fees aren't split across positions.",
+    "Per-position variant of run_daily_close: same day-close, but realized P&L, allocated sales tax, matched broker fees, and (today only) unrealized mark-to-market are grouped by item type_id instead of summed into one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly, no need to call run_daily_close first) but doesn't persist the breakdown separately — it's recomputed on demand from the same permanent ledger data each time. Realized sales tax has no per-item ESI linkage, but since it's a flat rate on sell value (not item-specific), it's allocated exactly by each position's revenue share, not estimated. Unrealized mark-to-market uses the best SELL price at Jita net of sales_tax_pct (every open lot is already-owned inventory, never an unfilled buy order). Broker fees only include what matchBrokerFees could confidently attribute (see run_daily_close) — unattributed fees aren't split across positions.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today."),
       broker_fee_pct: z.number().optional().describe("Same as run_daily_close — omit to auto-derive from history."),
+      sales_tax_pct: z.number().default(3.6).describe("Same as run_daily_close — nets today's unrealized mark-to-market value."),
     },
-    async ({ character_id, close_date, broker_fee_pct }) => {
-      const report = await runDailyClosePerPosition(character_id, close_date, broker_fee_pct);
+    async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
+      const report = await runDailyClosePerPosition(character_id, close_date, broker_fee_pct, sales_tax_pct);
       const db = getDatabase();
       const positions = report.positions.map((p) => ({ typeName: enrichTypeName(db, p.typeId), ...p }));
       return jsonResult({ ...report, positions });
