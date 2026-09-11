@@ -4,3 +4,4 @@ dist/
 *.db.gz
 *.gz
 .env
+.snipe/
