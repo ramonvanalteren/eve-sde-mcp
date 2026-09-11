@@ -10,7 +10,7 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "npm rebuild better-sqlite3 2>/dev/null || true",
+    "postinstall": "node scripts/postinstall.mjs",
     "rebuild": "npm rebuild better-sqlite3"
   },
   "keywords": [
