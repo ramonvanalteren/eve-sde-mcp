@@ -16,6 +16,7 @@ import {
   matchBrokerFees,
   estimateBrokerFeePct,
   attributeExitFees,
+  attributeAcquisitionFees,
   type BrokerFeeEntry,
   type OrderRecord,
 } from "./fees.js";
@@ -297,6 +298,12 @@ export interface DailyCloseReport {
   exitFeesRelistingAttributed: number;
   /** exitFeesAttributed split per type_id. */
   exitFeesByType: Record<number, { total: number; relisting: number }>;
+  /** Buy-side mirror: acquisition-campaign fees (re-placed buy orders before the fill) attributed to this day's buys — lifetime economics of acquiring today's inventory, already counted in brokerFeesPaid when paid. */
+  acquisitionFeesAttributed: number;
+  /** The relisting-churn portion of acquisitionFeesAttributed. */
+  acquisitionFeesRelistingAttributed: number;
+  /** acquisitionFeesAttributed split per type_id. */
+  acquisitionFeesByType: Record<number, { total: number; relisting: number }>;
   flags: string[];
 }
 
@@ -510,6 +517,48 @@ export async function runDailyClose(
   if (sellTxRows.length > 0 && exitAttribution.unattributed.length / sellTxRows.length > 0.2) {
     flags.push(
       `${exitAttribution.unattributed.length} of ${sellTxRows.length} sell transaction(s) predate any synced sell listing of their type (order history aged out or synced late) — exit-fee attribution skipped for them.`
+    );
+  }
+
+  // Acquisition-fee attribution: the buy-side mirror (see
+  // attributeAcquisitionFees in fees.ts) — the relisting churn spent
+  // acquiring today's inventory (cancelled/re-placed buy orders before the
+  // fill landed), attributed to the day's buy transactions. Same lifetime
+  // framing as exit fees: already counted in brokerFeesPaid when paid;
+  // deliberately NOT folded into lot cost basis (that would double-count
+  // realized COGS in the daily view).
+  const buyTxRows = db
+    .prepare(
+      `SELECT transaction_id, date, type_id, quantity FROM wallet_transactions
+       WHERE character_id = ? AND is_buy = 1 AND date >= ? AND date < ? ORDER BY date`
+    )
+    .all(char.characterId, start, end) as Array<{
+    transaction_id: number;
+    date: string;
+    type_id: number;
+    quantity: number;
+  }>;
+  const acquisitionAttribution = attributeAcquisitionFees(
+    globalOrderRecords,
+    orderFees,
+    buyTxRows.map((r) => ({ transactionId: r.transaction_id, date: r.date, typeId: r.type_id, quantity: r.quantity }))
+  );
+  const acquisitionFeesByType: Record<number, { total: number; relisting: number }> = {};
+  let acquisitionFeesAttributed = 0;
+  let acquisitionFeesRelistingAttributed = 0;
+  for (const r of buyTxRows) {
+    const a = acquisitionAttribution.perPurchase.get(r.transaction_id);
+    if (!a) continue;
+    acquisitionFeesAttributed += a.total;
+    acquisitionFeesRelistingAttributed += a.relisting;
+    const cur = acquisitionFeesByType[r.type_id] ?? { total: 0, relisting: 0 };
+    cur.total += a.total;
+    cur.relisting += a.relisting;
+    acquisitionFeesByType[r.type_id] = cur;
+  }
+  if (buyTxRows.length > 0 && acquisitionAttribution.unattributed.length / buyTxRows.length > 0.2) {
+    flags.push(
+      `${acquisitionAttribution.unattributed.length} of ${buyTxRows.length} buy transaction(s) predate any synced buy order of their type (order history aged out or synced late) — acquisition-fee attribution skipped for them.`
     );
   }
 
@@ -745,6 +794,9 @@ export async function runDailyClose(
     exitFeesAttributed,
     exitFeesRelistingAttributed,
     exitFeesByType,
+    acquisitionFeesAttributed,
+    acquisitionFeesRelistingAttributed,
+    acquisitionFeesByType,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
@@ -894,7 +946,8 @@ export async function runDailyClosePerPosition(
     feeMatch.matched,
     aggregate.salesTaxPaid,
     unrealizedByType,
-    new Map(Object.entries(aggregate.exitFeesByType).map(([k, v]) => [Number(k), v] as const))
+    new Map(Object.entries(aggregate.exitFeesByType).map(([k, v]) => [Number(k), v] as const)),
+    new Map(Object.entries(aggregate.acquisitionFeesByType).map(([k, v]) => [Number(k), v] as const))
   );
 
   return {

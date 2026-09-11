@@ -10,6 +10,8 @@ import {
   estimateBrokerFeePct,
   matchBrokerFees,
   computeOpenChainSunkFees,
+  attributeAcquisitionFees,
+  computeOpenBuySunkFees,
   type BrokerFeeEntry,
   type OrderRecord,
 } from "../ledger/fees.js";
@@ -202,7 +204,7 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "get_open_lots",
-    "List current open FIFO cost-basis lots (unsold inventory, with acquisition date and unit cost) for the authenticated character's ledger — the basis unrealized P&L is computed against. Each lot also carries the listing/relisting fees already sunk into its position's sell campaign (exitCampaignOrders, sunkExitFees, sunkRelistingFees, and per-unit variants): the cancel-and-relist churn cost attributed to the still-unsold inventory it was spent to move (heuristic — see attributeExitFees/computeOpenChainSunkFees in fees.ts). Fees that couldn't be confidently matched to orders are excluded (understated, not guessed) and noted in `notes`.",
+    "List current open FIFO cost-basis lots (unsold inventory with acquisition date and unit cost) for the authenticated character's ledger — the basis unrealized P&L is computed against. Each lot carries both directions of relisting churn as lifetime overlays (never folded into unit_cost or daily P&L — fees are already expensed as brokerFeesPaid when paid): sunkExitFees/sunkRelistingFees (the cancel-and-relist cost of the position's sell campaign so far, see attributeExitFees) and acquisitionFeesPerUnit/allInUnitCost (the buy-campaign fees spent acquiring this lot's units — re-placed buy orders before the fill — giving an all-in cost basis). openBuySunkFees lists pre-acquisition churn: fees sunk into live buy campaigns that haven't produced units yet. Fees that couldn't be confidently matched to orders are excluded (understated, not guessed) and noted in `notes`.",
     {
       character_id: z.number().describe("Character ID"),
       type_id: z.number().optional().describe("Filter to a specific item type ID"),
@@ -271,10 +273,41 @@ export function registerLedgerTools(server: McpServer): void {
       const orderFees = new Map(match.matched.map((m) => [m.orderId, m.amount]));
       const sunkByType = computeOpenChainSunkFees(orders, orderFees);
 
+      // Acquisition attribution: every open lot IS a buy transaction, so the
+      // buy-campaign fees (re-placed buy orders before the fill) are
+      // attributed straight onto lots — as an all-in cost-basis overlay, never
+      // folded into unit_cost (fees are already expensed as brokerFeesPaid
+      // when paid; capitalizing them would double-count realized COGS).
+      const acquisition = attributeAcquisitionFees(
+        orders,
+        orderFees,
+        rows.map((r) => ({
+          transactionId: r.buy_transaction_id,
+          date: r.date,
+          typeId: r.type_id,
+          quantity: r.original_qty,
+        }))
+      );
+      const unattributedLots = rows.filter((r) => !acquisition.perPurchase.has(r.buy_transaction_id)).length;
+      if (unattributedLots > 0) {
+        notes.push(
+          `${unattributedLots} of ${rows.length} open lot(s) predate any synced buy order of their type — acquisition-fee attribution skipped for them`
+        );
+      }
+
+      // Pre-acquisition churn: fees sunk into live buy campaigns that have
+      // produced no units yet — they attach to future lots once fills land.
+      const openBuySunkFees = [...computeOpenBuySunkFees(orders, orderFees).values()].sort(
+        (a, b) => b.total - a.total
+      );
+
       const lots = rows.map((r) => {
         const sunk = sunkByType.get(r.type_id);
         const perUnit = sunk?.perUnit ?? 0;
         const perUnitRelisting = sunk?.perUnitRelisting ?? 0;
+        const acq = acquisition.perPurchase.get(r.buy_transaction_id);
+        const acqPerUnit = acq ? acq.total / Math.max(r.original_qty, 1) : 0;
+        const allInUnitCost = r.unit_cost + acqPerUnit;
         return {
           buyTransactionId: r.buy_transaction_id,
           typeName: enrichTypeName(sdeDb, r.type_id),
@@ -289,9 +322,20 @@ export function registerLedgerTools(server: McpServer): void {
           sunkExitFees: perUnit * r.remaining_qty,
           sunkRelistingFeesPerUnit: perUnitRelisting,
           sunkRelistingFees: perUnitRelisting * r.remaining_qty,
+          acquisitionFeesPerUnit: acqPerUnit,
+          acquisitionFees: acqPerUnit * r.remaining_qty,
+          allInUnitCost,
+          allInCostBasis: allInUnitCost * r.remaining_qty,
         };
       });
-      return jsonResult({ count: lots.length, brokerFeePctUsed: pctUsed, brokerFeePctDerived: estimate.estimatedPct !== null, notes, lots });
+      return jsonResult({
+        count: lots.length,
+        brokerFeePctUsed: pctUsed,
+        brokerFeePctDerived: estimate.estimatedPct !== null,
+        notes,
+        openBuySunkFees,
+        lots,
+      });
     }
   );
 }

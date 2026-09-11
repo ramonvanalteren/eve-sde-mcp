@@ -64,10 +64,10 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
 | `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting |
-| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. relisting-fee attribution and all-in net P&L per position |
+| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. both directions of relisting-fee attribution and all-in net P&L per position |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
-| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost and the relisting fees already sunk into each position's sell campaign) |
+| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost, all-in cost basis incl. acquisition churn, and the sell-side relisting fees already sunk per position) |
 | `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
 | `get_autoclose_status` | Inspect the autonomous daily-close heartbeat: config, per-character coverage of recent days, and the run log |
 
