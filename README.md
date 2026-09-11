@@ -56,6 +56,20 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `get_structure_orders` | Orders in a player-owned structure (authenticated) |
 | `get_market_types` | List type IDs with active orders in a region (public) |
 
+### Accounting Ledger (local)
+
+ESI's wallet journal/transactions only cover a rolling ~30 days and order history ~90 days — these tools persist synced data permanently in a local SQLite ledger (`~/.eve-sde/ledger.db`) so realized P&L, FIFO cost basis, daily closes, and relisting-fee correlation all survive past those windows.
+
+| Tool | Description |
+|------|-------------|
+| `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L (broker fees split into new-listing vs. relisting) |
+| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total |
+| `get_daily_close` | Read a previously computed close for one date |
+| `get_close_range` | Read a range of computed closes, with summed totals |
+| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |
+| `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
+
 ### Killmails (ESI)
 
 | Tool | Description |
@@ -83,7 +97,7 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 
 ## Setup
 
-Requires Node.js 20+.
+Requires Node.js 22+ (managed with [fnm](https://github.com/Schniz/fnm) — the version is pinned in `.node-version`).
 
 ```bash
 git clone https://github.com/ramonvanalteren/eve-sde-mcp.git

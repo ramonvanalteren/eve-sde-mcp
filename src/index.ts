@@ -13,8 +13,10 @@ import { registerMarketTools } from "./tools/market.js";
 import { registerIndustryEsiTools } from "./tools/industry-esi.js";
 import { registerFittingTools } from "./tools/fittings.js";
 import { registerKillmailTools } from "./tools/killmails.js";
+import { registerLedgerTools } from "./tools/ledger.js";
 import { sdeExists, closeDatabase } from "./database.js";
 import { closeAuthDb } from "./auth/tokens.js";
+import { closeLedgerDb } from "./ledger/db.js";
 import { downloadSde } from "./downloader.js";
 
 const server = new McpServer({
@@ -33,10 +35,12 @@ registerMarketTools(server);
 registerIndustryEsiTools(server);
 registerFittingTools(server);
 registerKillmailTools(server);
+registerLedgerTools(server);
 
 function shutdown(): void {
   closeDatabase();
   closeAuthDb();
+  closeLedgerDb();
 }
 
 process.on("SIGINT", () => {

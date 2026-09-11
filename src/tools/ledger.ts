@@ -1,0 +1,170 @@
+import { z } from "zod";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getDatabase } from "../database.js";
+import { enrichTypeName, jsonResult } from "../utils.js";
+import { syncWalletLedger } from "../ledger/sync.js";
+import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
+import { getLedgerDb } from "../ledger/db.js";
+import { estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../ledger/fees.js";
+
+export function registerLedgerTools(server: McpServer): void {
+  server.tool(
+    "sync_wallet_ledger",
+    "Pull the authenticated character's full available wallet journal + transaction + order history from ESI and persist it into the local ledger. ESI only retains ~30 days of wallet history and ~90 days of order history — anything not synced before it ages out is permanently unrecoverable, so this must run at least every couple of weeks (daily via run_daily_close is the normal way to do it) to keep the accounting ledger complete. Safe to call repeatedly; already-seen entries are no-ops.",
+    {
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+    },
+    async ({ character_id }) => {
+      const result = await syncWalletLedger(character_id);
+      return jsonResult(result);
+    }
+  );
+
+  server.tool(
+    "run_daily_close",
+    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Broker fees are further split into new-listing vs. relisting fees by correlating brokers_fee journal entries against order timestamps — this is a best-effort match (ESI gives no direct order/fee linkage), so brokerFeesUnmatched covers whatever couldn't be confidently attributed; brokerFeesPaid itself stays exact regardless. Unrealized P&L marks held inventory to the best SELL price at Jita (net of sales_tax_pct) — every open lot is already-owned inventory from a filled buy, never an unfilled buy order, so bid-side pricing would understate it by the bid-ask spread. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
+    {
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today. Use a past date to backfill a day you missed."),
+      broker_fee_pct: z.number().optional().describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). If omitted, it's auto-derived from the character's own already-synced fee/order history (see get_effective_broker_fee_pct); the close's flags say which happened. Prefer passing it explicitly once you know the character's real rate."),
+      sales_tax_pct: z.number().default(3.6).describe("Character's actual effective sales tax percentage (e.g. 3.4 for Accounting V + no standings) — used to net today's unrealized mark-to-market value (best sell price * (1 - this/100)). Pass explicitly; the default is generic."),
+    },
+    async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
+      const report = await runDailyClose(character_id, close_date, broker_fee_pct, sales_tax_pct);
+      return jsonResult(report);
+    }
+  );
+
+  server.tool(
+    "get_daily_close_by_position",
+    "Per-position variant of run_daily_close: same day-close, but realized P&L, allocated sales tax, matched broker fees, and (today only) unrealized mark-to-market are grouped by item type_id instead of summed into one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly, no need to call run_daily_close first) but doesn't persist the breakdown separately — it's recomputed on demand from the same permanent ledger data each time. Realized sales tax has no per-item ESI linkage, but since it's a flat rate on sell value (not item-specific), it's allocated exactly by each position's revenue share, not estimated. Unrealized mark-to-market uses the best SELL price at Jita net of sales_tax_pct (every open lot is already-owned inventory, never an unfilled buy order). Broker fees only include what matchBrokerFees could confidently attribute (see run_daily_close) — unattributed fees aren't split across positions.",
+    {
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today."),
+      broker_fee_pct: z.number().optional().describe("Same as run_daily_close — omit to auto-derive from history."),
+      sales_tax_pct: z.number().default(3.6).describe("Same as run_daily_close — nets today's unrealized mark-to-market value."),
+    },
+    async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
+      const report = await runDailyClosePerPosition(character_id, close_date, broker_fee_pct, sales_tax_pct);
+      const db = getDatabase();
+      const positions = report.positions.map((p) => ({ typeName: enrichTypeName(db, p.typeId), ...p }));
+      return jsonResult({ ...report, positions });
+    }
+  );
+
+  server.tool(
+    "get_effective_broker_fee_pct",
+    "Estimate the authenticated character's actual effective broker fee percentage from their own paid-fee history, without relying on the game's skill/standings formula (which would need a new ESI scope this server doesn't request). Finds unambiguous 1:1 pairs between brokers_fee journal entries and the order that caused them, and returns the median observed rate. Returns null if there isn't enough unambiguous history yet — run sync_wallet_ledger first, or place a few more orders and try again.",
+    {
+      character_id: z.number().describe("Character ID"),
+    },
+    async ({ character_id }) => {
+      const db = getLedgerDb();
+      const feeRows = db
+        .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
+        .all(character_id) as Array<{ id: number; date: string; amount: number | null }>;
+      const orderRows = db
+        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+        .all(character_id) as Array<{
+        order_id: number;
+        type_id: number;
+        is_buy_order: number;
+        price: number;
+        volume_total: number;
+        issued: string;
+        state: OrderRecord["state"];
+      }>;
+
+      const fees: BrokerFeeEntry[] = feeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
+      const orders: OrderRecord[] = orderRows.map((r) => ({
+        orderId: r.order_id,
+        typeId: r.type_id,
+        isBuyOrder: r.is_buy_order === 1,
+        price: r.price,
+        volumeTotal: r.volume_total,
+        issued: r.issued,
+        state: r.state,
+      }));
+
+      const estimate = estimateBrokerFeePct(fees, orders);
+      return jsonResult(estimate);
+    }
+  );
+
+  server.tool(
+    "get_daily_close",
+    "Read a previously computed day-close for the given date, without re-syncing or recomputing anything. Returns nothing if that date hasn't been closed yet — use run_daily_close first.",
+    {
+      character_id: z.number().describe("Character ID"),
+      close_date: z.string().describe("UTC date, YYYY-MM-DD"),
+    },
+    async ({ character_id, close_date }) => {
+      const row = getStoredClose(character_id, close_date);
+      if (!row) {
+        return jsonResult({ found: false, note: `No close stored for ${close_date}. Use run_daily_close to compute it.` });
+      }
+      return jsonResult({ found: true, close: row });
+    }
+  );
+
+  server.tool(
+    "get_close_range",
+    "Read a range of previously computed day-closes (for trend / period P&L review), without re-syncing or recomputing anything.",
+    {
+      character_id: z.number().describe("Character ID"),
+      from_date: z.string().describe("UTC date, YYYY-MM-DD, inclusive"),
+      to_date: z.string().describe("UTC date, YYYY-MM-DD, inclusive"),
+    },
+    async ({ character_id, from_date, to_date }) => {
+      const rows = getStoredCloseRange(character_id, from_date, to_date);
+      const totals = rows.reduce(
+        (acc: { realizedPnlNet: number; brokerFeesPaid: number; salesTaxPaid: number }, r) => ({
+          realizedPnlNet: acc.realizedPnlNet + ((r.realized_pnl_net as number) ?? 0),
+          brokerFeesPaid: acc.brokerFeesPaid + ((r.broker_fees_paid as number) ?? 0),
+          salesTaxPaid: acc.salesTaxPaid + ((r.sales_tax_paid as number) ?? 0),
+        }),
+        { realizedPnlNet: 0, brokerFeesPaid: 0, salesTaxPaid: 0 }
+      );
+      return jsonResult({ days: rows.length, totals, closes: rows });
+    }
+  );
+
+  server.tool(
+    "get_open_lots",
+    "List current open FIFO cost-basis lots (unsold inventory, with acquisition date and unit cost) for the authenticated character's ledger — the basis unrealized P&L is computed against.",
+    {
+      character_id: z.number().describe("Character ID"),
+      type_id: z.number().optional().describe("Filter to a specific item type ID"),
+    },
+    async ({ character_id, type_id }) => {
+      const db = getLedgerDb();
+      const sdeDb = getDatabase();
+      let query = `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost FROM lots WHERE character_id = ? AND remaining_qty > 0`;
+      const params: unknown[] = [character_id];
+      if (type_id) {
+        query += ` AND type_id = ?`;
+        params.push(type_id);
+      }
+      query += ` ORDER BY type_id, date`;
+      const rows = db.prepare(query).all(...params) as Array<{
+        buy_transaction_id: number;
+        type_id: number;
+        date: string;
+        original_qty: number;
+        remaining_qty: number;
+        unit_cost: number;
+      }>;
+      const lots = rows.map((r) => ({
+        buyTransactionId: r.buy_transaction_id,
+        typeName: enrichTypeName(sdeDb, r.type_id),
+        typeId: r.type_id,
+        date: r.date,
+        originalQty: r.original_qty,
+        remainingQty: r.remaining_qty,
+        unitCost: r.unit_cost,
+        costBasis: r.remaining_qty * r.unit_cost,
+      }));
+      return jsonResult({ count: lots.length, lots });
+    }
+  );
+}

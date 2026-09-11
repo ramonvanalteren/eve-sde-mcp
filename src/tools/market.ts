@@ -52,7 +52,7 @@ const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
 const JITA_TRADE_HUB = 60003760;
 const MAX_CONCURRENT_ESI = 10;
 
-async function mapConcurrent<T, R>(
+export async function mapConcurrent<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>
