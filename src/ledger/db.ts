@@ -149,6 +149,23 @@ export function getLedgerDb(): Database.Database {
       journal_entries INTEGER NOT NULL DEFAULT 0,
       transactions INTEGER NOT NULL DEFAULT 0
     );
+
+    -- Audit log of the autonomous daily-close heartbeat (see
+    -- src/ledger/autoclose.ts): one row per sync/close attempt, successful
+    -- or failed, so get_autoclose_status can show exactly what the server
+    -- did without anyone having watched stderr.
+    CREATE TABLE IF NOT EXISTS autoclose_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      close_date TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_autoclose_character_date ON autoclose_runs(character_id, close_date);
+    CREATE INDEX IF NOT EXISTS idx_autoclose_started ON autoclose_runs(started_at);
   `);
 
   // Migrations for columns added after the table already existed on disk.

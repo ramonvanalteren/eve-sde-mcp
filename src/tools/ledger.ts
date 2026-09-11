@@ -5,6 +5,7 @@ import { enrichTypeName, jsonResult } from "../utils.js";
 import { syncWalletLedger } from "../ledger/sync.js";
 import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
 import { getLedgerDb } from "../ledger/db.js";
+import { autoCloseHeartbeatInfo } from "../ledger/autoclose.js";
 import {
   estimateBrokerFeePct,
   matchBrokerFees,
@@ -16,7 +17,7 @@ import {
 export function registerLedgerTools(server: McpServer): void {
   server.tool(
     "sync_wallet_ledger",
-    "Pull the authenticated character's full available wallet journal + transaction + order history from ESI and persist it into the local ledger. ESI only retains ~30 days of wallet history and ~90 days of order history — anything not synced before it ages out is permanently unrecoverable, so this must run at least every couple of weeks (daily via run_daily_close is the normal way to do it) to keep the accounting ledger complete. Safe to call repeatedly; already-seen entries are no-ops.",
+    "Pull the authenticated character's full available wallet journal + transaction + order history from ESI and persist it into the local ledger. ESI only retains ~30 days of wallet history and ~90 days of order history — anything not synced before it ages out is permanently unrecoverable. The autonomous daily-close heartbeat (see get_autoclose_status) syncs automatically while the server is running, which is the normal way this stays current; call this tool manually only when you need a sync outside the heartbeat (e.g. right after placing orders, before a manual close). Safe to call repeatedly; already-seen entries are no-ops.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
     },
@@ -132,6 +133,70 @@ export function registerLedgerTools(server: McpServer): void {
         { realizedPnlNet: 0, brokerFeesPaid: 0, salesTaxPaid: 0 }
       );
       return jsonResult({ days: rows.length, totals, closes: rows });
+    }
+  );
+
+  server.tool(
+    "get_autoclose_status",
+    "Inspect the server's autonomous daily-close heartbeat: whether it's active, its config (from ~/.eve-sde/config.json -> autoClose), per-character sync/close coverage of recent days, and its recent run log (autoclose_runs — every sync/close attempt, successful or failed). The heartbeat syncs the wallet ledger and closes every completed UTC day after EVE downtime (~11:30 UTC default) while the server runs — no one needs to ask. Use this to check coverage after downtime/gaps (a day only stays closeable within ESI's ~30-day journal window) and to see why, if anything, a day didn't close.",
+    {},
+    async () => {
+      const heartbeat = autoCloseHeartbeatInfo();
+      const db = getLedgerDb();
+      const today = new Date().toISOString().slice(0, 10);
+      const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const windowStart = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
+
+      const charRows = db.prepare(`SELECT DISTINCT character_id FROM sync_state`).all() as Array<{
+        character_id: number;
+      }>;
+      const characters = charRows.map((c) => {
+        const syncRow = db
+          .prepare(`SELECT last_synced_at FROM sync_state WHERE character_id = ?`)
+          .get(c.character_id) as { last_synced_at: string | null } | undefined;
+        const closedRows = db
+          .prepare(
+            `SELECT close_date FROM daily_closes WHERE character_id = ? AND close_date >= ? ORDER BY close_date`
+          )
+          .all(c.character_id, windowStart) as Array<{ close_date: string }>;
+        const closed = closedRows.map((r) => r.close_date);
+        const closedSet = new Set(closed);
+        const missing: string[] = [];
+        for (
+          let t = new Date(`${windowStart}T00:00:00Z`).getTime();
+          t <= new Date(`${yesterday}T00:00:00Z`).getTime();
+          t += 86_400_000
+        ) {
+          const d = new Date(t).toISOString().slice(0, 10);
+          if (!closedSet.has(d)) missing.push(d);
+        }
+        const failedRows = db
+          .prepare(
+            `SELECT close_date, COUNT(*) AS attempts, MAX(started_at) AS last_attempt
+             FROM autoclose_runs
+             WHERE character_id = ? AND kind = 'close' AND outcome = 'failed' AND close_date >= ?
+             GROUP BY close_date ORDER BY close_date`
+          )
+          .all(c.character_id, windowStart) as Array<{
+          close_date: string;
+          attempts: number;
+          last_attempt: string;
+        }>;
+        return {
+          characterId: c.character_id,
+          lastSyncedAt: syncRow?.last_synced_at ?? null,
+          yesterdayClosed: closedSet.has(yesterday),
+          closedDaysLast30: closed.length,
+          missingDays: missing,
+          recentFailedAttempts: failedRows,
+        };
+      });
+
+      const runs = db
+        .prepare(`SELECT * FROM autoclose_runs ORDER BY started_at DESC, id DESC LIMIT 25`)
+        .all() as Array<Record<string, unknown>>;
+
+      return jsonResult({ heartbeat, characters, recentRuns: runs });
     }
   );
 

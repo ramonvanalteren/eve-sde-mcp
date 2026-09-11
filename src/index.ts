@@ -17,6 +17,7 @@ import { registerLedgerTools } from "./tools/ledger.js";
 import { sdeExists, closeDatabase } from "./database.js";
 import { closeAuthDb } from "./auth/tokens.js";
 import { closeLedgerDb } from "./ledger/db.js";
+import { startAutoClose, stopAutoClose } from "./ledger/autoclose.js";
 import { downloadSde } from "./downloader.js";
 
 const server = new McpServer({
@@ -38,6 +39,7 @@ registerKillmailTools(server);
 registerLedgerTools(server);
 
 function shutdown(): void {
+  stopAutoClose();
   closeDatabase();
   closeAuthDb();
   closeLedgerDb();
@@ -67,6 +69,18 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  transport.onclose = () => {
+    // Client closed the transport (app quit/restart) — stop the heartbeat
+    // immediately rather than letting its last actions race the exit path.
+    stopAutoClose();
+  };
+
+  // Autonomous daily close: sync + close completed UTC days while this
+  // server is running, no one asking required (config: ~/.eve-sde/config.json
+  // -> autoClose; see src/ledger/autoclose.ts). The heartbeat's timers are
+  // unref'd, so this never prevents the process from exiting with the
+  // transport.
+  startAutoClose();
 }
 
 main().catch((err) => {
