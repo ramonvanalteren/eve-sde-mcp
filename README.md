@@ -69,6 +69,23 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `get_close_range` | Read a range of computed closes, with summed totals |
 | `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost and the relisting fees already sunk into each position's sell campaign) |
 | `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
+| `get_autoclose_status` | Inspect the autonomous daily-close heartbeat: config, per-character coverage of recent days, and the run log |
+
+**Autonomous daily close.** While the server is running it closes days by itself: it syncs the wallet ledger once its last sync is older than 20 hours, and closes every completed UTC day (including backfilling gaps up to 25 days) once EVE downtime (~11:05 UTC) has published that day's market history — the default cutoff is 11:30 UTC. Everything is condition-based and idempotent, so a sleeping machine or a closed MCP client just means the next heartbeat catches up; nothing is lost as long as gaps stay under ESI's ~30-day windows. Every attempt (success or failure) is logged to the `autoclose_runs` table — `get_autoclose_status` shows coverage and history. Configure or disable via `~/.eve-sde/config.json`:
+
+```json
+{
+  "autoClose": {
+    "enabled": true,
+    "minUtcHour": 11.5,
+    "tickMinutes": 30,
+    "syncMaxAgeHours": 20,
+    "lookbackDays": 25,
+    "maxAttemptsPerDate": 3,
+    "maxBackfillsPerTick": 5
+  }
+}
+```
 
 ### Killmails (ESI)
 
