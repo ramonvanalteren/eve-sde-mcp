@@ -63,11 +63,11 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | Tool | Description |
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
-| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L (broker fees split into new-listing vs. relisting) |
-| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting |
+| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. relisting-fee attribution and all-in net P&L per position |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
-| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost) |
+| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost and the relisting fees already sunk into each position's sell campaign) |
 | `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
 
 ### Killmails (ESI)
@@ -97,27 +97,55 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 
 ## Setup
 
-Requires Node.js 22+ (managed with [fnm](https://github.com/Schniz/fnm) — the version is pinned in `.node-version`).
+Requires Node.js 22+ (managed with [fnm](https://github.com/Schniz/fnm) — the version is pinned in `.node-version`). Development and the deployed server both run this pinned version.
 
 ```bash
 git clone https://github.com/ramonvanalteren/eve-sde-mcp.git
 cd eve-sde-mcp
+fnm use            # switch to the pinned Node before installing
 npm install
 npm run build
 ```
 
 The SDE database (~460MB) is auto-downloaded to `~/.eve-sde/eve.db` on first run.
 
-## Claude Desktop / Claude Chat
+## Server install (production)
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+The MCP server is **installed separately from the development checkout** — it never runs from the repo directly:
+
+```bash
+fnm use            # deploy refuses to run under the wrong Node
+npm run deploy
+```
+
+`npm run deploy` builds `dist/`, wipes and repopulates `~/.eve-sde/server/` (dist, a production-only `node_modules` built for the pinned runtime, a `start.sh` launcher with the resolved Node path baked in), verifies the native binding there, and updates the Claude Desktop config (with a timestamped backup; `--no-config` skips). Restart Claude Desktop afterwards. The resulting config entry is:
 
 ```json
 {
   "mcpServers": {
     "eve-sde": {
-      "command": "node",
-      "args": ["/path/to/eve-sde-mcp/dist/index.js"]
+      "command": "/Users/you/.eve-sde/server/start.sh"
+    }
+  }
+}
+```
+
+Updates are the same command — it's a clean redeploy. Data (`eve.db`, `ledger.db`, `auth.db`, `config.json`) lives in `~/.eve-sde/` and is shared between the installed server and dev runs, unchanged by deploys.
+
+**Why the separation exists:** the server used to run from this checkout via `bootstrap.mjs`, launched by the MCP client under `/opt/homebrew/bin/node` while development ran under fnm — two runtimes, one shared `node_modules`. The launcher's on-mismatch "npm rebuild" silently flipped the `better-sqlite3` binary between ABIs on every relaunch, racing the dev shell's own rebuilds; a torn binary left macOS killing every process that tried to load it (Code Signature Invalid). Two rules now prevent that class of failure:
+
+1. **The server owns its install.** `~/.eve-sde/server/` is independent of the dev tree — branch switches, `npm install`, and rebuilds in the repo can't affect a running or deployed server, and vice versa.
+2. **Launchers never rebuild.** `start.sh` (repo and install) and `bootstrap.mjs` verify the binding and fail loudly with the fix on mismatch. They never mutate `node_modules` — silent self-repair by a launcher running under an unexpected runtime is what corrupted the shared install.
+
+## Claude Desktop / Claude Chat
+
+Use the deployed install (see [Server install](#server-install-production)) — don't point an MCP client at the dev checkout. If you know what you're doing and want a dev-tree launch anyway:
+
+```json
+{
+  "mcpServers": {
+    "eve-sde": {
+      "command": "/path/to/eve-sde-mcp/start.sh"
     }
   }
 }
@@ -141,11 +169,16 @@ Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. S
 ## Development
 
 ```bash
+fnm use
 npm run dev          # Run with tsx (no build needed)
 npm test             # Run test suite
 npm run test:watch   # Watch mode
 npm run build        # Compile TypeScript
+npm run rebuild      # Rebuild better-sqlite3 for the current fnm Node
+npm run deploy       # (Re)install the server to ~/.eve-sde/server
 ```
+
+`start.sh` and `bootstrap.mjs` (dev-tree launchers) check that the native binding loads under the resolved runtime and exit with instructions on mismatch — they never rebuild automatically. If the binding breaks after a Node switch, run `fnm use` (to the `.node-version` pin) and `npm run rebuild`.
 
 ## Data
 

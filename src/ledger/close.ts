@@ -8,10 +8,17 @@ import {
   summarizeFeesAndTax,
   splitCashflow,
   computeUnrealized,
+  computeReconciliationGap,
   type LotState,
   type TransactionInput,
 } from "./fifo.js";
-import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "./fees.js";
+import {
+  matchBrokerFees,
+  estimateBrokerFeePct,
+  attributeExitFees,
+  type BrokerFeeEntry,
+  type OrderRecord,
+} from "./fees.js";
 import { buildPositionCloses, type PositionConsumption, type PositionClose } from "./positions.js";
 
 const DEFAULT_BROKER_FEE_PCT = 1.0;
@@ -49,6 +56,12 @@ function dayRange(closeDate: string): { start: string; end: string } {
 
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** The most recently COMPLETED UTC day — a day can only be officially closed
+ *  once it's over, so this is the default close target. */
+function previousUtcDay(): string {
+  return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 /**
@@ -195,6 +208,57 @@ async function fetchNetSellPrices(typeIds: number[], salesTaxPct: number): Promi
   return prices;
 }
 
+export type MarksMethod = "live_jita_best_sell" | "region_daily_average";
+
+interface EsiHistoryRow {
+  date: string;
+  average: number;
+}
+
+/**
+ * Historical mark for a past close: The Forge daily-average price from ESI
+ * market history, net of sales tax. Region-wide rather than Jita-4-4-specific,
+ * and a daily average rather than the close-time best sell — the best mark
+ * CCP exposes for a completed day (a date's history rows publish at the next
+ * downtime, ~11:00 UTC). Falls back to cost via computeUnrealized's
+ * priceMissing handling when no row exists for the date.
+ */
+async function fetchHistoryNetSellPrices(
+  typeIds: number[],
+  closeDate: string,
+  salesTaxPct: number
+): Promise<Map<number, number>> {
+  const prices = new Map<number, number>();
+  await mapConcurrent(typeIds, MAX_CONCURRENT_ESI, async (typeId) => {
+    try {
+      const history = await esiGetAll<EsiHistoryRow>(
+        `/markets/${THE_FORGE}/history/?type_id=${typeId}`,
+        { public: true, cacheTtlMs: ESI_CACHE_TTL }
+      );
+      const row = history.find((h) => h.date === closeDate);
+      if (row !== undefined) prices.set(typeId, row.average * (1 - salesTaxPct / 100));
+    } catch {
+      // leave unset — computeUnrealized falls back to cost basis for missing prices
+    }
+  });
+  return prices;
+}
+
+async function fetchMarksForClose(
+  typeIds: number[],
+  closeDate: string,
+  isToday: boolean,
+  salesTaxPct: number
+): Promise<{ prices: Map<number, number>; method: MarksMethod }> {
+  if (isToday) {
+    return { prices: await fetchNetSellPrices(typeIds, salesTaxPct), method: "live_jita_best_sell" };
+  }
+  return {
+    prices: await fetchHistoryNetSellPrices(typeIds, closeDate, salesTaxPct),
+    method: "region_daily_average",
+  };
+}
+
 export interface DailyCloseReport {
   characterId: number;
   characterName: string;
@@ -225,15 +289,34 @@ export interface DailyCloseReport {
   /** Net market_escrow journal movement for the day. Negative = capital newly committed to buy orders; positive = escrow released (cancellations/fills). Routine — not part of nonTradingCashflow and not flagged. */
   escrowMovement: number;
   reconciliationGap: number | null;
+  /** How unrealized P&L was marked: "live_jita_best_sell" for a same-day close, "region_daily_average" (market history, net of tax) for a past date. */
+  marksMethod: MarksMethod;
+  /** Listing/relisting campaign fees attributed to this day's sales (see attributeExitFees) — the lifetime economics of getting those positions sold. NOT an extra expense: these fees were already counted in brokerFeesPaid on the days they were paid. */
+  exitFeesAttributed: number;
+  /** The relisting-churn portion of exitFeesAttributed. */
+  exitFeesRelistingAttributed: number;
+  /** exitFeesAttributed split per type_id. */
+  exitFeesByType: Record<number, { total: number; relisting: number }>;
   flags: string[];
 }
 
 /**
- * Compute (and persist) the close for one UTC calendar day. Realized P&L,
- * fees, and tax are exact for any already-synced historical date. Unrealized
- * P&L / NAV require live market data, so they're only computed when
- * close_date is today — a past-dated close carries realized figures only,
- * with a flag explaining why unrealized is null.
+ * Compute (and persist) the close for one UTC calendar day, 00:00–24:00 UTC.
+ * Defaults to the most recently completed day (yesterday) — a day can only be
+ * officially closed once it's over. Pass close_date explicitly to close
+ * another past date, or today for an intraday snapshot.
+ *
+ * Realized P&L, fees, and tax are exact for any already-synced date.
+ * Unrealized P&L / NAV are computed for every date: a same-day close marks to
+ * the live Jita best-sell net of sales tax; a past date marks to The Forge
+ * daily-average market history for that date (published at the next downtime),
+ * also net of sales tax — the methodology difference is flagged, not hidden.
+ * Escrow for a past date is reconstructed by backing market_escrow journal
+ * movement since that date out of the current live escrow.
+ *
+ * The reconciliation gap ties NAV change to realized net P&L + non-trading
+ * cashflow + the CHANGE in unrealized P&L vs the prior close (see
+ * computeReconciliationGap).
  */
 export async function runDailyClose(
   characterId: number | undefined,
@@ -245,7 +328,7 @@ export async function runDailyClose(
   await syncWalletLedger(char.characterId);
   applyPendingFifo(char.characterId);
 
-  const date = closeDate ?? todayUtc();
+  const date = closeDate ?? previousUtcDay();
   const isToday = date === todayUtc();
   const { start, end } = dayRange(date);
   const db = getLedgerDb();
@@ -337,15 +420,19 @@ export async function runDailyClose(
     state: r.state,
   });
 
+  // Global fee/order views over all synced history: used to auto-derive the
+  // effective broker rate and to attribute exit fees to positions (the
+  // day-scoped candidateOrderRows above can't see relist campaigns that
+  // started on earlier days).
+  const allFeeRows = db
+    .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
+    .all(char.characterId) as Array<{ id: number; date: string; amount: number | null }>;
+  const allOrderRows = db
+    .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+    .all(char.characterId) as typeof candidateOrderRows;
+
   let resolvedBrokerFeePct = brokerFeePct;
   if (resolvedBrokerFeePct === undefined) {
-    const allFeeRows = db
-      .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
-      .all(char.characterId) as Array<{ id: number; date: string; amount: number | null }>;
-    const allOrderRows = db
-      .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
-      .all(char.characterId) as typeof candidateOrderRows;
-
     const estimate = estimateBrokerFeePct(
       allFeeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 })),
       allOrderRows.map(toOrderRecord)
@@ -377,6 +464,55 @@ export async function runDailyClose(
 
   const realizedPnlNet = realized.grossPnl - brokerFees - salesTax;
 
+  // Exit-fee attribution: the listing/relisting campaign fees this day's sales
+  // actually incurred (see attributeExitFees in fees.ts for the heuristic and
+  // its caveats). A lifetime-economics view layered on top of the day-exact
+  // fee figures above — deliberately NOT added to realizedPnlNet, which must
+  // stay cash-true for the day the fees were paid.
+  const globalOrderRecords = allOrderRows.map(toOrderRecord);
+  const globalFeeMatch = matchBrokerFees(
+    allFeeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 })),
+    globalOrderRecords,
+    [],
+    resolvedBrokerFeePct
+  );
+  const orderFees = new Map(globalFeeMatch.matched.map((m) => [m.orderId, m.amount]));
+
+  const sellTxRows = db
+    .prepare(
+      `SELECT transaction_id, date, type_id, quantity FROM wallet_transactions
+       WHERE character_id = ? AND is_buy = 0 AND date >= ? AND date < ? ORDER BY date`
+    )
+    .all(char.characterId, start, end) as Array<{
+    transaction_id: number;
+    date: string;
+    type_id: number;
+    quantity: number;
+  }>;
+  const exitAttribution = attributeExitFees(
+    globalOrderRecords,
+    orderFees,
+    sellTxRows.map((r) => ({ transactionId: r.transaction_id, date: r.date, typeId: r.type_id, quantity: r.quantity }))
+  );
+  const exitFeesByType: Record<number, { total: number; relisting: number }> = {};
+  let exitFeesAttributed = 0;
+  let exitFeesRelistingAttributed = 0;
+  for (const r of sellTxRows) {
+    const a = exitAttribution.perSale.get(r.transaction_id);
+    if (!a) continue;
+    exitFeesAttributed += a.total;
+    exitFeesRelistingAttributed += a.relisting;
+    const cur = exitFeesByType[r.type_id] ?? { total: 0, relisting: 0 };
+    cur.total += a.total;
+    cur.relisting += a.relisting;
+    exitFeesByType[r.type_id] = cur;
+  }
+  if (sellTxRows.length > 0 && exitAttribution.unattributed.length / sellTxRows.length > 0.2) {
+    flags.push(
+      `${exitAttribution.unattributed.length} of ${sellTxRows.length} sell transaction(s) predate any synced sell listing of their type (order history aged out or synced late) — exit-fee attribution skipped for them.`
+    );
+  }
+
   const openingBalRow = db
     .prepare(
       `SELECT balance FROM wallet_journal WHERE character_id = ? AND date < ? AND balance IS NOT NULL
@@ -395,50 +531,80 @@ export async function runDailyClose(
   let escrowCommitted: number | null = null;
   let closingNav: number | null = null;
 
-  if (isToday) {
-    const lotRows = db
-      .prepare(
-        `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost
-         FROM lots WHERE character_id = ? AND remaining_qty > 0`
-      )
-      .all(char.characterId) as Array<{
-      buy_transaction_id: number;
-      type_id: number;
-      date: string;
-      original_qty: number;
-      remaining_qty: number;
-      unit_cost: number;
-    }>;
-    const lots: LotState[] = lotRows.map((r) => ({
-      buyTransactionId: r.buy_transaction_id,
-      typeId: r.type_id,
-      date: r.date,
-      originalQty: r.original_qty,
-      remainingQty: r.remaining_qty,
-      unitCost: r.unit_cost,
-    }));
+  const lotRows = db
+    .prepare(
+      `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost
+       FROM lots WHERE character_id = ? AND remaining_qty > 0`
+    )
+    .all(char.characterId) as Array<{
+    buy_transaction_id: number;
+    type_id: number;
+    date: string;
+    original_qty: number;
+    remaining_qty: number;
+    unit_cost: number;
+  }>;
+  const lots: LotState[] = lotRows.map((r) => ({
+    buyTransactionId: r.buy_transaction_id,
+    typeId: r.type_id,
+    date: r.date,
+    originalQty: r.original_qty,
+    remainingQty: r.remaining_qty,
+    unitCost: r.unit_cost,
+  }));
 
-    const typeIds = [...new Set(lots.map((l) => l.typeId))];
-    const netSellPrices = await fetchNetSellPrices(typeIds, salesTaxPct);
-    const unrealized = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId));
-    unrealizedPnl = unrealized.unrealizedPnl;
-    inventoryMarketValue = unrealized.totalMarketValue;
+  const typeIds = [...new Set(lots.map((l) => l.typeId))];
+  const { prices: netSellPrices, method: marksMethod } = await fetchMarksForClose(typeIds, date, isToday, salesTaxPct);
+  const unrealized = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId));
+  unrealizedPnl = unrealized.unrealizedPnl;
+  inventoryMarketValue = unrealized.totalMarketValue;
 
-    const missingPrices = unrealized.perType.filter((p) => p.priceMissing);
-    if (missingPrices.length > 0) {
+  const missingPrices = unrealized.perType.filter((p) => p.priceMissing);
+  if (missingPrices.length > 0) {
+    flags.push(
+      `No ${isToday ? "live Jita sell order" : "market-history row for this date"} for ${missingPrices.length} held type(s) — valued at cost for this close, not true market value.`
+    );
+  }
+  if (!isToday) {
+    flags.push(
+      "Historical marks: The Forge daily-average market history net of sales tax (not Jita 4-4 best-sell as used for a same-day close) — consecutive-day closes can mix methodologies, which shows up in the reconciliation gap."
+    );
+    // A date's market history publishes at the next EVE downtime (~11:00 UTC).
+    if (date === previousUtcDay() && new Date().getUTCHours() < 11) {
       flags.push(
-        `No live Jita sell order for ${missingPrices.length} held type(s) — valued at cost for this close, not true market value.`
+        "Closing yesterday before EVE downtime (~11:00 UTC): yesterday's market history typically isn't published yet, so marks above may be cost-fallbacks. Re-run after downtime for a complete historical close."
       );
     }
+    const daysSinceClose = (Date.now() - new Date(end).getTime()) / 86_400_000;
+    if (daysSinceClose > 25) {
+      flags.push(
+        `Close date is ~${Math.floor(daysSinceClose)} days ago — ESI's wallet journal only reaches back ~30 days, so market_escrow entries needed to reconstruct that day's escrow may have aged out before being synced; escrowCommitted for this date may be incomplete.`
+      );
+    }
+  }
 
-    const orders = await esiGet<EsiOrder[]>(`/characters/${char.characterId}/orders/`, {
-      characterId: char.characterId,
-      cacheTtlMs: ESI_CACHE_TTL,
-    });
-    escrowCommitted = orders
-      .filter((o) => o.is_buy_order)
-      .reduce((sum, o) => sum + (o.escrow ?? 0), 0);
+  const orders = await esiGet<EsiOrder[]>(`/characters/${char.characterId}/orders/`, {
+    characterId: char.characterId,
+    cacheTtlMs: ESI_CACHE_TTL,
+  });
+  const escrowNow = orders.filter((o) => o.is_buy_order).reduce((sum, o) => sum + (o.escrow ?? 0), 0);
+  // Escrow at end-of-close-date, for any date: take the current live escrow
+  // and back out all market_escrow movement since then. Journal amount and
+  // escrow balance move in OPPOSITE directions (a placement posts negative,
+  // a fill/cancel release posts positive), so
+  //   escrow_then = escrow_now + Σ(market_escrow amounts after `end`).
+  // For today's close `end` is in the future, the sum is empty, and this
+  // reduces to the live escrow figure.
+  const escrowSinceClose = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS m FROM wallet_journal WHERE character_id = ? AND ref_type = 'market_escrow' AND date > ?`
+    )
+    .get(char.characterId, end) as { m: number };
+  escrowCommitted = escrowNow + escrowSinceClose.m;
 
+  // Physical inventory reconciliation only for today: ESI has no historical
+  // assets endpoint, so a past date's assets can't be compared against its lots.
+  if (isToday) {
     const assets = await esiGetAll<EsiAsset>(`/characters/${char.characterId}/assets/`, {
       characterId: char.characterId,
       cacheTtlMs: ESI_CACHE_TTL,
@@ -461,28 +627,31 @@ export async function runDailyClose(
         `${mismatches} of ${mismatchedTypes} held item type(s) have a live-asset quantity that doesn't match the FIFO ledger's remaining lots — reconcile manually (see get_character_assets vs lots) before trusting inventory value.`
       );
     }
+  }
 
-    if (closingBalRow) {
-      closingNav = closingBalRow.balance + escrowCommitted + inventoryMarketValue;
-    }
-  } else {
-    flags.push("Past-dated close: unrealized P&L / NAV require live market data and are only computed for today's close.");
+  if (closingBalRow) {
+    closingNav = closingBalRow.balance + escrowCommitted + inventoryMarketValue;
   }
 
   const prevClose = db
-    .prepare(`SELECT closing_nav FROM daily_closes WHERE character_id = ? AND close_date < ? ORDER BY close_date DESC LIMIT 1`)
-    .get(char.characterId, date) as { closing_nav: number | null } | undefined;
+    .prepare(
+      `SELECT closing_nav, unrealized_pnl FROM daily_closes WHERE character_id = ? AND close_date < ? ORDER BY close_date DESC LIMIT 1`
+    )
+    .get(char.characterId, date) as { closing_nav: number | null; unrealized_pnl: number | null } | undefined;
   const openingNav = prevClose?.closing_nav ?? null;
 
-  let reconciliationGap: number | null = null;
-  if (isToday && openingNav !== null && closingNav !== null) {
-    const expectedChange = realizedPnlNet + nonTradingCashflow; // unrealized change vs prior close isn't isolated here since prior day's unrealized breakdown isn't retained per-type; NAV delta already includes it structurally.
-    reconciliationGap = closingNav - openingNav - expectedChange - (unrealizedPnl ?? 0);
-    if (Math.abs(reconciliationGap) > 1) {
-      flags.push(
-        `NAV reconciliation gap of ${reconciliationGap.toFixed(0)} ISK vs prior close — expected NAV change didn't fully match realized P&L + non-trading cashflow + unrealized P&L delta. Likely a mark-to-market shift on already-held lots between closes, not necessarily an error.`
-      );
-    }
+  const reconciliationGap = computeReconciliationGap({
+    closingNav,
+    openingNav,
+    realizedPnlNet,
+    nonTradingCashflow,
+    unrealizedPnl,
+    priorUnrealizedPnl: prevClose?.unrealized_pnl ?? null,
+  });
+  if (reconciliationGap !== null && Math.abs(reconciliationGap) > 1) {
+    flags.push(
+      `NAV reconciliation gap of ${reconciliationGap.toFixed(0)} ISK vs prior close — NAV change didn't match realized net P&L + non-trading cashflow + change in unrealized P&L. Small gaps between consecutive closes can come from mark-methodology differences (live best-sell vs daily-average history) or moves in thin markets; larger ones warrant a manual look.`
+    );
   }
 
   db.prepare(
@@ -491,14 +660,14 @@ export async function runDailyClose(
       realized_revenue, realized_cogs, realized_pnl_gross, sales_tax_paid, broker_fees_paid, realized_pnl_net,
       unmatched_sell_revenue, unmatched_sell_qty, unrealized_pnl, inventory_market_value, escrow_committed,
       opening_nav, closing_nav, non_trading_cashflow, escrow_movement,
-      broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched, broker_fee_pct_used,
+      broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched, broker_fee_pct_used, marks_method,
       reconciliation_gap, flags, computed_at
     ) VALUES (
       @characterId, @closeDate, @openingWalletBalance, @closingWalletBalance,
       @realizedRevenue, @realizedCogs, @realizedPnlGross, @salesTaxPaid, @brokerFeesPaid, @realizedPnlNet,
       @unmatchedSellRevenue, @unmatchedSellQty, @unrealizedPnl, @inventoryMarketValue, @escrowCommitted,
       @openingNav, @closingNav, @nonTradingCashflow, @escrowMovement,
-      @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched, @brokerFeePctUsed,
+      @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched, @brokerFeePctUsed, @marksMethod,
       @reconciliationGap, @flags, datetime('now')
     )
     ON CONFLICT(character_id, close_date) DO UPDATE SET
@@ -523,6 +692,7 @@ export async function runDailyClose(
       broker_fees_relisting = excluded.broker_fees_relisting,
       broker_fees_unmatched = excluded.broker_fees_unmatched,
       broker_fee_pct_used = excluded.broker_fee_pct_used,
+      marks_method = excluded.marks_method,
       reconciliation_gap = excluded.reconciliation_gap,
       flags = excluded.flags,
       computed_at = datetime('now')`
@@ -551,6 +721,7 @@ export async function runDailyClose(
     nonTradingCashflow,
     escrowMovement: escrowMovementToday,
     reconciliationGap,
+    marksMethod,
     flags: JSON.stringify(flags),
   });
 
@@ -570,6 +741,10 @@ export async function runDailyClose(
     brokerFeesRelisting: feeMatch.relistTotal,
     brokerFeesUnmatched: feeMatch.unmatchedTotal,
     brokerFeePctUsed: resolvedBrokerFeePct,
+    marksMethod,
+    exitFeesAttributed,
+    exitFeesRelistingAttributed,
+    exitFeesByType,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
@@ -597,12 +772,13 @@ export interface PerPositionCloseReport {
 
 /**
  * Per-position breakdown of a day-close: realized P&L, allocated sales tax,
- * and matched broker fees grouped by type_id, plus unrealized mark-to-market
- * for currently-held positions (today only, same limitation as the
- * portfolio-level close). Not separately persisted — it's a deterministic
- * view recomputed on demand from the same permanently-stored ledger data
- * (lot_consumptions, orders, wallet_journal) the aggregate close uses, so
- * there's nothing to gain from storing it twice.
+ * matched broker fees, and exit-fee attribution grouped by type_id, plus
+ * unrealized mark-to-market for currently-held positions (for any closed
+ * date — live Jita marks for today, market-history marks for past dates,
+ * same as the portfolio-level close). Not separately persisted — it's a
+ * deterministic view recomputed on demand from the same permanently-stored
+ * ledger data (lot_consumptions, orders, wallet_journal) the aggregate close
+ * uses, so there's nothing to gain from storing it twice.
  *
  * Always runs the aggregate close first (same sync + FIFO application, and
  * to resolve brokerFeePctUsed consistently) — calling this alone is
@@ -685,38 +861,41 @@ export async function runDailyClosePerPosition(
     aggregate.brokerFeePctUsed
   );
 
-  let unrealizedByType: ReturnType<typeof computeUnrealized>["perType"] = [];
-  if (aggregate.isToday) {
-    const lotRows = db
-      .prepare(
-        `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost
-         FROM lots WHERE character_id = ? AND remaining_qty > 0`
-      )
-      .all(aggregate.characterId) as Array<{
-      buy_transaction_id: number;
-      type_id: number;
-      date: string;
-      original_qty: number;
-      remaining_qty: number;
-      unit_cost: number;
-    }>;
-    const lots: LotState[] = lotRows.map((r) => ({
-      buyTransactionId: r.buy_transaction_id,
-      typeId: r.type_id,
-      date: r.date,
-      originalQty: r.original_qty,
-      remainingQty: r.remaining_qty,
-      unitCost: r.unit_cost,
-    }));
-    const typeIds = [...new Set(lots.map((l) => l.typeId))];
-    // Same ESI calls the aggregate close just made for the same type_ids —
-    // effectively free, they hit the response cache (ESI_CACHE_TTL) rather
-    // than round-tripping again.
-    const netSellPrices = await fetchNetSellPrices(typeIds, salesTaxPct);
-    unrealizedByType = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId)).perType;
-  }
+  const lotRows = db
+    .prepare(
+      `SELECT buy_transaction_id, type_id, date, original_qty, remaining_qty, unit_cost
+       FROM lots WHERE character_id = ? AND remaining_qty > 0`
+    )
+    .all(aggregate.characterId) as Array<{
+    buy_transaction_id: number;
+    type_id: number;
+    date: string;
+    original_qty: number;
+    remaining_qty: number;
+    unit_cost: number;
+  }>;
+  const lots: LotState[] = lotRows.map((r) => ({
+    buyTransactionId: r.buy_transaction_id,
+    typeId: r.type_id,
+    date: r.date,
+    originalQty: r.original_qty,
+    remainingQty: r.remaining_qty,
+    unitCost: r.unit_cost,
+  }));
+  const typeIds = [...new Set(lots.map((l) => l.typeId))];
+  // Same ESI calls the aggregate close just made for the same type_ids —
+  // effectively free, they hit the response cache (ESI_CACHE_TTL) rather
+  // than round-tripping again.
+  const { prices: netSellPrices } = await fetchMarksForClose(typeIds, aggregate.closeDate, aggregate.isToday, salesTaxPct);
+  const unrealizedByType = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId)).perType;
 
-  const positions = buildPositionCloses(consumptions, feeMatch.matched, aggregate.salesTaxPaid, unrealizedByType);
+  const positions = buildPositionCloses(
+    consumptions,
+    feeMatch.matched,
+    aggregate.salesTaxPaid,
+    unrealizedByType,
+    new Map(Object.entries(aggregate.exitFeesByType).map(([k, v]) => [Number(k), v] as const))
+  );
 
   return {
     characterId: aggregate.characterId,

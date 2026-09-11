@@ -271,3 +271,39 @@ export function computeUnrealized(lots: LotState[], marketPrice: MarketPriceLook
 
   return { totalCost, totalMarketValue, unrealizedPnl: totalMarketValue - totalCost, perType };
 }
+
+// ---------------------------------------------------------------------------
+// NAV reconciliation (desk-style tie-out)
+// ---------------------------------------------------------------------------
+
+export interface ReconciliationInput {
+  closingNav: number | null;
+  openingNav: number | null;
+  realizedPnlNet: number;
+  nonTradingCashflow: number;
+  /** Total unrealized P&L at THIS close (null if no mark-to-market). */
+  unrealizedPnl: number | null;
+  /** Total unrealized P&L at the PRIOR close — null when there was no prior
+   *  close or it predates mark storage. The reconciliation must use the
+   *  CHANGE in unrealized P&L, not the total: the prior close's NAV already
+   *  embedded that day's unrealized value, so counting today's total again
+   *  would double-subtract it. (Historical bug: subtracting the total made
+   *  the gap equal minus yesterday's unrealized P&L — a false break of
+   *  exactly the size of yesterday's paper P&L on every holding day.) */
+  priorUnrealizedPnl: number | null;
+}
+
+/**
+ * The trading-desk tie-out: NAV change over the day should equal realized
+ * net P&L + non-trading cashflow + the change in unrealized P&L. Any
+ * non-zero remainder is a break to investigate (mark methodology shift,
+ * data gap, non-trading flow misclassified as trading, etc.). Returns null
+ * when either NAV or this close's unrealized figure isn't available.
+ */
+export function computeReconciliationGap(input: ReconciliationInput): number | null {
+  if (input.closingNav === null || input.openingNav === null || input.unrealizedPnl === null) return null;
+  const deltaUnrealized = input.unrealizedPnl - (input.priorUnrealizedPnl ?? 0);
+  const navChange = input.closingNav - input.openingNav;
+  const expectedChange = input.realizedPnlNet + input.nonTradingCashflow + deltaUnrealized;
+  return navChange - expectedChange;
+}

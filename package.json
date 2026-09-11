@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "node scripts/postinstall.mjs",
-    "rebuild": "npm rebuild better-sqlite3"
+    "rebuild": "npm rebuild better-sqlite3",
+    "deploy": "node scripts/deploy.mjs"
   },
   "keywords": [
     "eve-online",

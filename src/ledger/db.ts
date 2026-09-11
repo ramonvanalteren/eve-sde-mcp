@@ -157,6 +157,9 @@ export function getLedgerDb(): Database.Database {
   ensureColumn(ledgerDb, "daily_closes", "broker_fees_relisting", "REAL NOT NULL DEFAULT 0");
   ensureColumn(ledgerDb, "daily_closes", "broker_fees_unmatched", "REAL NOT NULL DEFAULT 0");
   ensureColumn(ledgerDb, "daily_closes", "broker_fee_pct_used", "REAL");
+  // How unrealized P&L was marked for this close: live Jita best-sell or
+  // The Forge daily-average market history (past dates).
+  ensureColumn(ledgerDb, "daily_closes", "marks_method", "TEXT");
 
   return ledgerDb;
 }
