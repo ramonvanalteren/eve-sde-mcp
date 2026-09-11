@@ -227,3 +227,174 @@ export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord
 
   return { estimatedPct, sampleCount: observations.length, observations };
 }
+
+// ---------------------------------------------------------------------------
+// Exit-fee attribution: the listing/relisting fees a sale (or a still-open
+// lot) actually incurred, attributed to the position it was spent to sell.
+// ---------------------------------------------------------------------------
+
+// ESI exposes no direct link between a market transaction and the order that
+// filled it (journal context_id for market_transaction rows is the type_id,
+// not the order id), so attribution is a timestamp heuristic: a station
+// trader runs one live sell listing per type at a time, so the sell order of
+// that type with the latest `issued` <= the transaction's date is the
+// listing it filled through. Multiple simultaneous same-type listings
+// (split inventory) would degrade this — flagged as a known approximation.
+
+export interface ExitFeeSale {
+  transactionId: number;
+  date: string;
+  typeId: number;
+  quantity: number;
+}
+
+export interface ExitFeeAttribution {
+  /** Listing fees of the position's campaign up to and including the listing
+   *  this sale filled through, allocated per unit sold. Fees from listings
+   *  placed AFTER the sale are deliberately excluded — they sold other units. */
+  total: number;
+  /** The relisting portion of `total` — everything except the campaign's
+   *  initial listing fee. This is the churn cost of getting this position sold. */
+  relisting: number;
+}
+
+export interface ExitFeeAttributionResult {
+  perSale: Map<number, ExitFeeAttribution>;
+  unattributed: Array<{ transactionId: number; typeId: number; reason: "no_listing_at_time" }>;
+}
+
+export function attributeExitFees(
+  orders: OrderRecord[],
+  orderFees: Map<number, number>,
+  sales: ExitFeeSale[]
+): ExitFeeAttributionResult {
+  const sellOrdersByType = new Map<number, OrderRecord[]>();
+  for (const o of orders) {
+    if (o.isBuyOrder) continue;
+    const arr = sellOrdersByType.get(o.typeId) ?? [];
+    arr.push(o);
+    sellOrdersByType.set(o.typeId, arr);
+  }
+  for (const arr of sellOrdersByType.values()) {
+    arr.sort((a, b) => a.issued.localeCompare(b.issued) || a.orderId - b.orderId);
+  }
+
+  const perSale = new Map<number, ExitFeeAttribution>();
+  const unattributed: ExitFeeAttributionResult["unattributed"] = [];
+
+  for (const sale of sales) {
+    const chain = sellOrdersByType.get(sale.typeId) ?? [];
+
+    // The listing live at sale time: latest order issued at/before the sale.
+    let liveIdx = -1;
+    for (let i = 0; i < chain.length; i++) {
+      if (chain[i].issued <= sale.date) liveIdx = i;
+      else break;
+    }
+    if (liveIdx === -1) {
+      unattributed.push({ transactionId: sale.transactionId, typeId: sale.typeId, reason: "no_listing_at_time" });
+      continue;
+    }
+
+    // The campaign this sale belongs to starts after the last order that
+    // fully filled before it (a fulfilled order closed out the previous
+    // position; cancelled/expired relists after it are this campaign).
+    let campaignStart = 0;
+    for (let i = liveIdx - 1; i >= 0; i--) {
+      if (chain[i].state === "fulfilled") {
+        campaignStart = i + 1;
+        break;
+      }
+    }
+
+    // Cumulative fees of the campaign up to and including the live listing,
+    // split into the initial listing fee vs the relisting churn after it.
+    let campaignFees = 0;
+    let relistingFees = 0;
+    for (let i = campaignStart; i <= liveIdx; i++) {
+      const fee = orderFees.get(chain[i].orderId) ?? 0;
+      campaignFees += fee;
+      if (i > campaignStart) relistingFees += fee;
+    }
+
+    // The fees were paid to move the live listing's volume; allocate per unit.
+    const volume = Math.max(chain[liveIdx].volumeTotal, 1);
+    perSale.set(sale.transactionId, {
+      total: (campaignFees / volume) * sale.quantity,
+      relisting: (relistingFees / volume) * sale.quantity,
+    });
+  }
+
+  return { perSale, unattributed };
+}
+
+export interface OpenChainSunkFees {
+  typeId: number;
+  /** The currently-live listing this churn is attached to. */
+  liveOrderId: number | null;
+  /** Listing + relisting fees sunk so far into getting this position sold. */
+  total: number;
+  /** The relisting portion of `total`. */
+  relisting: number;
+  /** Sunk fees per unit of the live listing's volume — the per-lot exit cost. */
+  perUnit: number;
+  perUnitRelisting: number;
+  orderCount: number;
+}
+
+/**
+ * For each type with an unsold position still being worked: the fees sunk
+ * into its listing campaign so far (initial listing + every relist). A
+ * "campaign" is the run of cancelled/expired/open sell orders since the
+ * type's last fully-filled order — each relist in that run was paid to move
+ * the same still-unsold inventory. Types whose last orders all fulfilled
+ * (nothing left to churn) get no entry.
+ */
+export function computeOpenChainSunkFees(
+  orders: OrderRecord[],
+  orderFees: Map<number, number>
+): Map<number, OpenChainSunkFees> {
+  const sellOrdersByType = new Map<number, OrderRecord[]>();
+  for (const o of orders) {
+    if (o.isBuyOrder) continue;
+    const arr = sellOrdersByType.get(o.typeId) ?? [];
+    arr.push(o);
+    sellOrdersByType.set(o.typeId, arr);
+  }
+
+  const result = new Map<number, OpenChainSunkFees>();
+  for (const [typeId, chain] of sellOrdersByType) {
+    chain.sort((a, b) => a.issued.localeCompare(b.issued) || a.orderId - b.orderId);
+
+    // Trailing campaign: everything after the last fulfilled order.
+    let lastFulfilled = -1;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      if (chain[i].state === "fulfilled") {
+        lastFulfilled = i;
+        break;
+      }
+    }
+    const campaign = chain.slice(lastFulfilled + 1);
+    if (campaign.length === 0) continue; // position sold out — no churn to carry
+
+    let total = 0;
+    let relisting = 0;
+    for (let i = 0; i < campaign.length; i++) {
+      const fee = orderFees.get(campaign[i].orderId) ?? 0;
+      total += fee;
+      if (i > 0) relisting += fee;
+    }
+    const live = campaign[campaign.length - 1];
+    const volume = Math.max(live.volumeTotal, 1);
+    result.set(typeId, {
+      typeId,
+      liveOrderId: live.state === "open" ? live.orderId : null,
+      total,
+      relisting,
+      perUnit: total / volume,
+      perUnitRelisting: relisting / volume,
+      orderCount: campaign.length,
+    });
+  }
+  return result;
+}

@@ -5,7 +5,13 @@ import { enrichTypeName, jsonResult } from "../utils.js";
 import { syncWalletLedger } from "../ledger/sync.js";
 import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
 import { getLedgerDb } from "../ledger/db.js";
-import { estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../ledger/fees.js";
+import {
+  estimateBrokerFeePct,
+  matchBrokerFees,
+  computeOpenChainSunkFees,
+  type BrokerFeeEntry,
+  type OrderRecord,
+} from "../ledger/fees.js";
 
 export function registerLedgerTools(server: McpServer): void {
   server.tool(
@@ -22,10 +28,10 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "run_daily_close",
-    "Run (or re-run) a day-close for the authenticated character: syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L (net of actual broker fees + sales tax from the wallet journal, not an estimated rate), plus unrealized P&L / NAV mark-to-market when closing today. Broker fees are further split into new-listing vs. relisting fees by correlating brokers_fee journal entries against order timestamps — this is a best-effort match (ESI gives no direct order/fee linkage), so brokerFeesUnmatched covers whatever couldn't be confidently attributed; brokerFeesPaid itself stays exact regardless. Unrealized P&L marks held inventory to the best SELL price at Jita (net of sales_tax_pct) — every open lot is already-owned inventory from a filled buy, never an unfilled buy order, so bid-side pricing would understate it by the bid-ask spread. Persists one row per (character, date) in the local ledger — re-running for the same date overwrites that date's row. Past dates only get realized figures (unrealized/NAV need live market data, only available for today).",
+    "Run (or re-run) a day-close for the authenticated character over one full UTC day (00:00–24:00 UTC). Defaults to the most recently completed day — yesterday — since a day can only be officially closed once it's over; pass close_date for another past date, or today's date for an intraday snapshot. Syncs the wallet ledger (journal, transactions, orders), applies new transactions through the FIFO cost-basis engine, and computes realized P&L net of actual broker fees + sales tax from the wallet journal (not an estimated rate). Unrealized P&L / NAV are computed for every date: today's close marks held inventory to the live Jita best SELL price (net of sales_tax_pct; every open lot is already-owned inventory from a filled buy, so bid-side pricing would understate it by the bid-ask spread), while a past date marks to The Forge daily-average market history for that date (publishes at the next downtime, ~11:00 UTC), also net of sales tax — marksMethod in the report says which. Escrow for past dates is reconstructed by backing market_escrow journal movement since that date out of the current live escrow. The NAV reconciliation gap ties NAV change to realized net P&L + non-trading cashflow + the CHANGE in unrealized P&L vs the prior close — investigate any non-trivial gap. Broker fees are split into new-listing vs. relisting by correlating brokers_fee journal entries against order timestamps (best-effort: ESI gives no direct order/fee linkage; brokerFeesUnmatched covers what couldn't be confidently attributed, brokerFeesPaid stays exact), and exitFeesAttributed / exitFeesRelistingAttributed attribute the listing/relisting campaign fees to the day's sales — lifetime position economics, not an extra expense on top of brokerFeesPaid. Persists one row per (character, date) — re-running for the same date overwrites that date's row.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
-      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today. Use a past date to backfill a day you missed."),
+      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to the most recently completed UTC day (yesterday) over its full 00:00–24:00 period. Use an explicit past date to backfill a missed day, or today's date for an intraday snapshot."),
       broker_fee_pct: z.number().optional().describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). If omitted, it's auto-derived from the character's own already-synced fee/order history (see get_effective_broker_fee_pct); the close's flags say which happened. Prefer passing it explicitly once you know the character's real rate."),
       sales_tax_pct: z.number().default(3.6).describe("Character's actual effective sales tax percentage (e.g. 3.4 for Accounting V + no standings) — used to net today's unrealized mark-to-market value (best sell price * (1 - this/100)). Pass explicitly; the default is generic."),
     },
@@ -37,10 +43,10 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "get_daily_close_by_position",
-    "Per-position variant of run_daily_close: same day-close, but realized P&L, allocated sales tax, matched broker fees, and (today only) unrealized mark-to-market are grouped by item type_id instead of summed into one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly, no need to call run_daily_close first) but doesn't persist the breakdown separately — it's recomputed on demand from the same permanent ledger data each time. Realized sales tax has no per-item ESI linkage, but since it's a flat rate on sell value (not item-specific), it's allocated exactly by each position's revenue share, not estimated. Unrealized mark-to-market uses the best SELL price at Jita net of sales_tax_pct (every open lot is already-owned inventory, never an unfilled buy order). Broker fees only include what matchBrokerFees could confidently attribute (see run_daily_close) — unattributed fees aren't split across positions.",
+    "Per-position variant of run_daily_close: same day-close (same default — yesterday, the most recently completed UTC day), but realized P&L, allocated sales tax, matched broker fees, exit-fee attribution, and unrealized mark-to-market are grouped by item type_id instead of one portfolio total. Runs the same sync + FIFO application as run_daily_close (safe to call directly) but doesn't persist the breakdown — it's recomputed on demand from the same permanent ledger data. Realized sales tax is allocated exactly by each position's revenue share (flat rate on sell value, not item-specific). Broker fees include only what matchBrokerFees could confidently attribute — unattributed fees stay portfolio-level. exitFeesAttributed / exitFeesRelistingAttributed carry the listing/relisting campaign fees of that day's sales (heuristic, see fees.ts): lifetime position economics, already counted in brokerFeesPaid on the days they were paid — realizedPnlNetAfterExitFees (net P&L minus attributed exit fees) is the position's all-in profitability. Unrealized mark-to-market works for any closed date: live Jita best-sell for today, The Forge daily-average market history for past dates (see marksMethod).",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
-      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to today."),
+      close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to yesterday (most recently completed UTC day)."),
       broker_fee_pct: z.number().optional().describe("Same as run_daily_close — omit to auto-derive from history."),
       sales_tax_pct: z.number().default(3.6).describe("Same as run_daily_close — nets today's unrealized mark-to-market value."),
     },
@@ -131,7 +137,7 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "get_open_lots",
-    "List current open FIFO cost-basis lots (unsold inventory, with acquisition date and unit cost) for the authenticated character's ledger — the basis unrealized P&L is computed against.",
+    "List current open FIFO cost-basis lots (unsold inventory, with acquisition date and unit cost) for the authenticated character's ledger — the basis unrealized P&L is computed against. Each lot also carries the listing/relisting fees already sunk into its position's sell campaign (exitCampaignOrders, sunkExitFees, sunkRelistingFees, and per-unit variants): the cancel-and-relist churn cost attributed to the still-unsold inventory it was spent to move (heuristic — see attributeExitFees/computeOpenChainSunkFees in fees.ts). Fees that couldn't be confidently matched to orders are excluded (understated, not guessed) and noted in `notes`.",
     {
       character_id: z.number().describe("Character ID"),
       type_id: z.number().optional().describe("Filter to a specific item type ID"),
@@ -154,17 +160,73 @@ export function registerLedgerTools(server: McpServer): void {
         remaining_qty: number;
         unit_cost: number;
       }>;
-      const lots = rows.map((r) => ({
-        buyTransactionId: r.buy_transaction_id,
-        typeName: enrichTypeName(sdeDb, r.type_id),
+
+      // Sunk exit fees per type: match every synced brokers_fee entry to its
+      // order (global history, same heuristic as the daily close) and sum the
+      // campaign fees of each type's still-active sell chain.
+      const feeRows = db
+        .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
+        .all(character_id) as Array<{ id: number; date: string; amount: number | null }>;
+      const orderRows = db
+        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+        .all(character_id) as Array<{
+        order_id: number;
+        type_id: number;
+        is_buy_order: number;
+        price: number;
+        volume_total: number;
+        issued: string;
+        state: OrderRecord["state"];
+      }>;
+      const fees: BrokerFeeEntry[] = feeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
+      const orders: OrderRecord[] = orderRows.map((r) => ({
+        orderId: r.order_id,
         typeId: r.type_id,
-        date: r.date,
-        originalQty: r.original_qty,
-        remainingQty: r.remaining_qty,
-        unitCost: r.unit_cost,
-        costBasis: r.remaining_qty * r.unit_cost,
+        isBuyOrder: r.is_buy_order === 1,
+        price: r.price,
+        volumeTotal: r.volume_total,
+        issued: r.issued,
+        state: r.state,
       }));
-      return jsonResult({ count: lots.length, lots });
+
+      const notes: string[] = [];
+      const estimate = estimateBrokerFeePct(fees, orders);
+      const pctUsed = estimate.estimatedPct ?? 1.0;
+      if (estimate.estimatedPct === null) {
+        notes.push(
+          `broker fee pct couldn't be derived yet (${estimate.sampleCount} unambiguous sample(s)) — used the generic 1.0% for fee/order matching, so sunk-fee figures may be off`
+        );
+      }
+      const match = matchBrokerFees(fees, orders, [], pctUsed);
+      if (match.unmatchedTotal > 0) {
+        notes.push(
+          `${match.unmatchedTotal.toFixed(0)} ISK of broker fees couldn't be confidently matched to an order — excluded from sunk-fee attribution, so these figures are a floor, not an estimate`
+        );
+      }
+      const orderFees = new Map(match.matched.map((m) => [m.orderId, m.amount]));
+      const sunkByType = computeOpenChainSunkFees(orders, orderFees);
+
+      const lots = rows.map((r) => {
+        const sunk = sunkByType.get(r.type_id);
+        const perUnit = sunk?.perUnit ?? 0;
+        const perUnitRelisting = sunk?.perUnitRelisting ?? 0;
+        return {
+          buyTransactionId: r.buy_transaction_id,
+          typeName: enrichTypeName(sdeDb, r.type_id),
+          typeId: r.type_id,
+          date: r.date,
+          originalQty: r.original_qty,
+          remainingQty: r.remaining_qty,
+          unitCost: r.unit_cost,
+          costBasis: r.remaining_qty * r.unit_cost,
+          exitCampaignOrders: sunk?.orderCount ?? 0,
+          sunkExitFeesPerUnit: perUnit,
+          sunkExitFees: perUnit * r.remaining_qty,
+          sunkRelistingFeesPerUnit: perUnitRelisting,
+          sunkRelistingFees: perUnitRelisting * r.remaining_qty,
+        };
+      });
+      return jsonResult({ count: lots.length, brokerFeePctUsed: pctUsed, brokerFeePctDerived: estimate.estimatedPct !== null, notes, lots });
     }
   );
 }

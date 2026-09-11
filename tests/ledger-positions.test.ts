@@ -95,4 +95,44 @@ describe("buildPositionCloses", () => {
     );
     expect(positions.map((p) => p.typeId)).toEqual([100, 200, 300]);
   });
+
+  it("carries exit-fee attribution per position and nets it into realizedPnlNetAfterExitFees", () => {
+    // Two types sold today; exit-fee attribution (from the listing campaigns
+    // their sales filled through) is passed per type. Type 100 churned its
+    // way to the sale (50 attributed, 20 of it relisting); type 200 sold
+    // first-try (10 attributed, 0 relisting).
+    const consumptions = [
+      sell(100, 10, 900_000, 1_000_000),
+      sell(200, 5, 500_000, 600_000),
+    ];
+    const matchedFees: PositionMatchedFee[] = [
+      { typeId: 100, amount: 30, classification: "relist" },
+      { typeId: 200, amount: 10, classification: "new_listing" },
+    ];
+    const exitFees = new Map([
+      [100, { total: 50, relisting: 20 }],
+      [200, { total: 10, relisting: 0 }],
+    ]);
+    const positions = buildPositionCloses(consumptions, matchedFees, 0, [], exitFees);
+
+    const t100 = positions.find((p) => p.typeId === 100)!;
+    expect(t100.exitFeesAttributed).toBe(50);
+    expect(t100.exitFeesRelistingAttributed).toBe(20);
+    // realizedPnlNet stays day-exact (gross 1M - tax 0 - day's matched fees 30)…
+    expect(t100.realizedPnlNet).toBe(999_970);
+    // …while realizedPnlNetAfterExitFees layers the campaign cost on top.
+    expect(t100.realizedPnlNetAfterExitFees).toBe(t100.realizedPnlNet - 50);
+
+    const t200 = positions.find((p) => p.typeId === 200)!;
+    expect(t200.exitFeesAttributed).toBe(10);
+    expect(t200.realizedPnlNetAfterExitFees).toBe(t200.realizedPnlNet - 10);
+  });
+
+  it("defaults exit-fee attribution to 0 when no attribution is provided", () => {
+    const positions = buildPositionCloses([sell(100, 1, 100, 200)], [], 0, []);
+    const t100 = positions.find((p) => p.typeId === 100)!;
+    expect(t100.exitFeesAttributed).toBe(0);
+    expect(t100.exitFeesRelistingAttributed).toBe(0);
+    expect(t100.realizedPnlNetAfterExitFees).toBe(t100.realizedPnlNet);
+  });
 });

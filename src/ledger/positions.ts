@@ -43,6 +43,12 @@ export interface PositionClose {
   brokerFeesNewListing: number;
   brokerFeesRelisting: number;
   realizedPnlNet: number;
+  /** Listing/relisting campaign fees attributed to this position's sales today (heuristic — see attributeExitFees in fees.ts). Lifetime economics of getting the position sold, NOT an extra daily expense: these fees were already expensed as brokerFeesPaid on the days they were paid. */
+  exitFeesAttributed: number;
+  /** The relisting-churn portion of exitFeesAttributed. */
+  exitFeesRelistingAttributed: number;
+  /** realizedPnlNet minus exitFeesAttributed — the position's P&L carrying the full cost of getting it sold. */
+  realizedPnlNetAfterExitFees: number;
   unrealizedPnl: number | null;
   remainingQty: number | null;
   costBasis: number | null;
@@ -54,7 +60,8 @@ export function buildPositionCloses(
   consumptions: PositionConsumption[],
   matchedFees: PositionMatchedFee[],
   totalSalesTax: number,
-  unrealizedByType: PositionUnrealized[]
+  unrealizedByType: PositionUnrealized[],
+  exitFeesByType?: Map<number, { total: number; relisting: number }>
 ): PositionClose[] {
   const byType = new Map<number, PositionClose>();
 
@@ -72,6 +79,9 @@ export function buildPositionCloses(
         brokerFeesNewListing: 0,
         brokerFeesRelisting: 0,
         realizedPnlNet: 0,
+        exitFeesAttributed: 0,
+        exitFeesRelistingAttributed: 0,
+        realizedPnlNetAfterExitFees: 0,
         unrealizedPnl: null,
         remainingQty: null,
         costBasis: null,
@@ -128,6 +138,10 @@ export function buildPositionCloses(
 
   for (const p of byType.values()) {
     p.realizedPnlNet = p.realizedGrossPnl - p.allocatedSalesTax - p.brokerFeesNewListing - p.brokerFeesRelisting;
+    const exitFees = exitFeesByType?.get(p.typeId);
+    p.exitFeesAttributed = exitFees?.total ?? 0;
+    p.exitFeesRelistingAttributed = exitFees?.relisting ?? 0;
+    p.realizedPnlNetAfterExitFees = p.realizedPnlNet - p.exitFeesAttributed;
   }
 
   return [...byType.values()].sort((a, b) => a.typeId - b.typeId);
