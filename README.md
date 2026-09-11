@@ -97,7 +97,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 
 ## Setup
 
-Requires Node.js 20+.
+Requires Node.js 22+ (managed with [fnm](https://github.com/Schniz/fnm) — the version is pinned in `.node-version`).
 
 ```bash
 git clone https://github.com/ramonvanalteren/eve-sde-mcp.git
