@@ -1,24 +1,35 @@
 #!/usr/bin/env node
 
-// Bootstrap for the MCP server.
-// Checks if better-sqlite3's native module matches the current Node version.
-// If not, rebuilds it before starting the server.
+// Dev-tree launcher for the MCP server.
 //
-// The check runs in a subprocess so that a failed require() doesn't pollute
-// this process's module cache — the server import must see a fresh module.
+// It checks that the better-sqlite3 native binding loads under the CURRENT
+// Node runtime and then starts the server — and that is ALL it does.
+//
+// This file used to auto-rebuild the binding on mismatch. That silent
+// mutation is exactly what corrupted this checkout in practice: an MCP
+// client launched the server from the dev tree under a different Node
+// (/opt/homebrew/bin/node) than the development shell (fnm), so every
+// relaunch silently rebuilt node_modules for the wrong ABI while the dev
+// shell kept rebuilding it back — and the racing writes left a torn binary
+// that macOS killed every loader of (Code Signature Invalid).
+//
+// The supported setup is now a separate install for the server
+// (`npm run deploy`, see README "Server install") so this file should only
+// ever run from a developer's own shell, under the Node version pinned in
+// .node-version. On any mismatch it fails loudly with instructions rather
+// than touching node_modules.
 
-import { execFileSync, execSync } from "child_process";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Ensure npm is findable — it lives alongside the running node binary
-const nodeDir = dirname(process.execPath);
-if (!process.env.PATH?.includes(nodeDir)) {
-  process.env.PATH = `${nodeDir}:${process.env.PATH || ""}`;
-}
-
+// The check runs in a subprocess so that a failed require() doesn't pollute
+// this process's module cache — the server import must see a fresh module.
+// NOTE: the binding loads lazily on first Database instantiation, so the
+// check has to actually open an in-memory database, not just require().
 try {
   execFileSync(
     process.execPath,
@@ -26,22 +37,28 @@ try {
     { cwd: __dirname, stdio: "pipe" }
   );
 } catch {
+  const pinned = readFileSync(join(__dirname, ".node-version"), "utf8").trim();
   process.stderr.write(
-    `better-sqlite3 needs rebuild for Node ${process.version}...\n`
+    [
+      "FATAL: better-sqlite3's native binding does not load under this runtime.",
+      "",
+      `  runtime in use : Node ${process.version} (ABI ${process.versions.modules})`,
+      `  project pin   : Node ${pinned} (.node-version)`,
+      "",
+      "This checkout's node_modules was built for a different Node version.",
+      "It will NOT be rebuilt automatically — silent rebuilds from a launcher",
+      "running under an unexpected runtime have corrupted installs before",
+      "(see README 'Server install'). Fix it explicitly:",
+      "",
+      `  fnm use ${pinned}        # switch this shell to the pinned runtime`,
+      "  npm run rebuild          # rebuild the binding for it",
+      "",
+      "If you meant to run the installed server (not the dev checkout),",
+      "launch ~/.eve-sde/server/start.sh instead — see README 'Server install'.",
+      "",
+    ].join("\n")
   );
-  try {
-    execSync("npm rebuild better-sqlite3", {
-      cwd: __dirname,
-      stdio: "pipe",
-    });
-    process.stderr.write("Rebuild complete.\n");
-  } catch (e) {
-    process.stderr.write(
-      `Rebuild failed: ${e instanceof Error ? e.message : e}\n` +
-      `Try: cd ${__dirname} && npm rebuild better-sqlite3\n`
-    );
-    process.exit(1);
-  }
+  process.exit(1);
 }
 
 await import("./dist/index.js");
