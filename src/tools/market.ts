@@ -5,7 +5,7 @@ import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/es
 import { parseEftFormat } from "../fitting/eft.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
 
-interface EsiOrder {
+export interface EsiOrder {
   order_id: number;
   type_id: number;
   location_id: number;
@@ -50,8 +50,8 @@ interface EsiTransaction {
 }
 
 const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
-const JITA_TRADE_HUB = 60003760;
-const MAX_CONCURRENT_ESI = 10;
+export const JITA_TRADE_HUB = 60003760;
+export const MAX_CONCURRENT_ESI = 10;
 
 export async function mapConcurrent<T, R>(
   items: T[],

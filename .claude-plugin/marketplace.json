@@ -28,6 +28,18 @@
         "sde",
         "pvp"
       ]
+    },
+    {
+      "name": "eve-industry",
+      "source": "./skills/eve-industry",
+      "description": "EVE Online industry skill: build-margin verification before committing runs (price_build), production review of active jobs, new BPO candidate selection, ME/TE/facility/index/invention knowledge. Works with the eve-sde-mcp SDE/ESI tools.",
+      "keywords": [
+        "eve-online",
+        "industry",
+        "manufacturing",
+        "blueprints",
+        "production"
+      ]
     }
   ]
 }
