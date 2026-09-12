@@ -3,6 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
 import { enrichTypeName, likeContains, jsonResult } from "../utils.js";
+import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./market.js";
+import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -51,6 +53,122 @@ const ACTIVITY_NAMES: Record<number, string> = {
 const COST_INDEX_CACHE_TTL = 10 * 60 * 1000;
 
 export function registerIndustryEsiTools(server: McpServer): void {
+  server.tool(
+    "price_build",
+    "Price a manufacturing job BEFORE committing runs: blueprint materials (ME-adjusted) at live market prices vs the product's sell price, net of sales tax and broker fee — the industry counterpart of margin verification. Reports unit build cost and margin on both acquisition bases (materials at sell orders = instant, at buy orders = patient), the full material table, book depths, and warnings for thin books or missing orders. Born from the 2026-09 audit where a 400-run Damage Control I job was committed at +0.9% margin. Point-in-time: re-verify before executing. Installation cost is optional (pass the in-client install number for exact figures).",
+    {
+      blueprint_type_id: z.number().optional().describe("Blueprint typeID (from search_blueprints or get_fittings-style lookups)"),
+      product_name: z.string().optional().describe("Product name — resolves the manufacturing blueprint that makes it (alternative to blueprint_type_id)"),
+      runs: z.number().default(1).describe("Number of runs to price"),
+      me_level: z.number().default(0).describe("Blueprint ME level 0-10 (0 = base material quantities)"),
+      region_id: z.number().default(10000002).describe("Region for market prices (default 10000002 = The Forge)"),
+      location_id: z.number().default(JITA_TRADE_HUB).describe("Station/structure to price materials and product at (default 60003760 = Jita 4-4)"),
+      sales_tax_pct: z.number().default(3.6).describe("Sales tax percentage on the product sale (default 3.6%)"),
+      broker_fee_pct: z.number().default(1.0).describe("Broker fee percentage on the product listing (default 1%)"),
+      installation_cost: z.number().optional().describe("Total installation cost for all runs, as shown by the in-client install dialog — folded into unit cost"),
+    },
+    async ({ blueprint_type_id, product_name, runs, me_level, region_id, location_id, sales_tax_pct, broker_fee_pct, installation_cost }) => {
+      const db = getDatabase();
+
+      // Resolve the blueprint: explicit typeID, or the manufacturing blueprint for a product name
+      let bpTypeId = blueprint_type_id;
+      if (!bpTypeId && product_name) {
+        const row = db
+          .prepare(
+            `SELECT iap.typeID as bpTypeId
+             FROM industryActivityProducts iap
+             JOIN invTypes p ON iap.productTypeID = p.typeID
+             WHERE p.typeName LIKE ? ESCAPE '\\' AND iap.activityID = 1
+             ORDER BY p.typeName
+             LIMIT 1`
+          )
+          .get(likeContains(product_name)) as { bpTypeId: number } | undefined;
+        if (!row) {
+          return { content: [{ type: "text", text: `No manufacturing blueprint found for a product matching "${product_name}".` }] };
+        }
+        bpTypeId = row.bpTypeId;
+      }
+      if (!bpTypeId) {
+        return { content: [{ type: "text", text: "Provide blueprint_type_id or product_name." }] };
+      }
+
+      const bpName = enrichTypeName(db, bpTypeId);
+
+      // Manufacturing materials + product from the SDE
+      const materialRows = db
+        .prepare(
+          `SELECT iam.materialTypeID, t.typeName as materialName, iam.quantity
+           FROM industryActivityMaterials iam
+           JOIN invTypes t ON iam.materialTypeID = t.typeID
+           WHERE iam.typeID = ? AND iam.activityID = 1`
+        )
+        .all(bpTypeId) as Array<{ materialTypeID: number; materialName: string; quantity: number }>;
+
+      const productRow = db
+        .prepare(
+          `SELECT iap.productTypeID, t.typeName as productName, iap.quantity
+           FROM industryActivityProducts iap
+           JOIN invTypes t ON iap.productTypeID = t.typeID
+           WHERE iap.typeID = ? AND iap.activityID = 1`
+        )
+        .get(bpTypeId) as { productTypeID: number; productName: string; quantity: number } | undefined;
+
+      if (materialRows.length === 0 || !productRow) {
+        return { content: [{ type: "text", text: `"${bpName}" has no manufacturing activity in the SDE — is it a blueprint?` }] };
+      }
+
+      // Live quotes for product + all materials, concurrently
+      const typeIds = [productRow.productTypeID, ...materialRows.map((m) => m.materialTypeID)];
+      const uniqueTypeIds = [...new Set(typeIds)];
+      const quotes = new Map<number, PriceQuote>();
+      await mapConcurrent(
+        uniqueTypeIds,
+        MAX_CONCURRENT_ESI,
+        async (typeId) => {
+          const url = `/markets/${region_id}/orders/?type_id=${typeId}&order_type=all`;
+          try {
+            const allOrders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: ESI_CACHE_TTL });
+            const orders = allOrders.filter((o) => o.location_id === location_id);
+            const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
+            const sellOrders = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - a.price);
+            quotes.set(typeId, {
+              bestSell: sellOrders[0]?.price ?? null,
+              bestBuy: buyOrders[0]?.price ?? null,
+              sellOrderCount: sellOrders.length,
+              buyOrderCount: buyOrders.length,
+            });
+          } catch (err) {
+            // One failed fetch must not sink the whole report — leave the quote absent
+            quotes.set(typeId, { bestSell: null, bestBuy: null, sellOrderCount: 0, buyOrderCount: 0 });
+            process.stderr.write(`[price_build] order fetch failed for type ${typeId}: ${err instanceof Error ? err.message : String(err)}\n`);
+          }
+        }
+      );
+
+      const input: BuildMarginInput = {
+        product: { name: productRow.productName, typeId: productRow.productTypeID, quantityPerRun: productRow.quantity },
+        materials: materialRows.map((m) => ({ name: m.materialName, typeId: m.materialTypeID, qtyPerRun: m.quantity })),
+        runs,
+        meLevel: me_level,
+        prices: quotes,
+        salesTaxPct: sales_tax_pct,
+        brokerFeePct: broker_fee_pct,
+        installationCostTotal: installation_cost ?? null,
+      };
+
+      const report = computeBuildMargin(input);
+
+      return jsonResult({
+        blueprint: { name: bpName, typeId: bpTypeId },
+        product: { name: productRow.productName, typeId: productRow.productTypeID, quantityPerRun: productRow.quantity },
+        pricingLocation: { regionId: region_id, locationId: location_id },
+        fees: { salesTaxPct: sales_tax_pct, brokerFeePct: broker_fee_pct },
+        ...report,
+        note: "Margins are point-in-time snapshots. The sell basis (materials at sell orders) is the conservative one; re-verify before committing runs.",
+      });
+    }
+  );
+
   server.tool(
     "get_industry_jobs",
     "Get active and recent industry jobs for the authenticated character — manufacturing, research, invention, reactions. Supports filtering by activity and status.",

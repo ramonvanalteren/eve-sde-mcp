@@ -2,6 +2,8 @@
 
 MCP server providing access to Eve Online's Static Data Export (SDE) and live character data via the ESI API — ship stats, module attributes, universe data, industry blueprints, character skills, and more.
 
+Companion skills ship in [`skills/`](skills/) as installable plugin packages (also listed in the `eve-sde` marketplace at [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)): **eve-trading** (hybrid station trading workflows), **eve-fitting** (fitting discipline), **eve-industry** (build-margin verification via price_build, production review, BPO candidate selection).
+
 Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLite conversion of CCP's SDE. Live data uses EVE SSO OAuth with PKCE (no client secret needed).
 
 ## Tools
@@ -128,6 +130,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 |------|-------------|
 | `get_industry_jobs` | Active/recent manufacturing, research, invention jobs |
 | `get_industry_cost_indices` | System cost indices for industry (public) |
+| `price_build` | Price a manufacturing job before committing runs: ME-adjusted blueprint materials at live market prices + installation cost vs the product's net sell — unit build cost and margin on both acquisition bases (materials at sell orders = instant/conservative, at buy orders = patient), book depths, thin-book warnings. Born from a production audit that found a 400-run job committed at +0.9% margin |
 | `get_character_assets` | Items in hangars/containers with names |
 | `get_character_contracts` | Courier, item exchange, auction contracts |
 

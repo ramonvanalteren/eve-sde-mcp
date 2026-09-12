@@ -1,0 +1,9 @@
+{
+  "name": "eve-industry",
+  "description": "EVE Online industry skill: build-margin verification before committing runs (price_build), production review of active jobs against live margins, new BPO candidate selection, and the industry knowledge layer (ME/TE, facilities, cost indices, invention). Born from a production audit where a 400-run job was committed at +0.9% margin. Use with the eve-sde-mcp SDE/ESI tools.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Ramon van Alteren"
+  },
+  "repository": "https://github.com/ramonvanalteren/eve-sde-mcp"
+}
