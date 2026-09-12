@@ -6,3 +6,4 @@ dist/
 .env
 .snipe/
 Eve trading-v1.zip
+.DS_Store
