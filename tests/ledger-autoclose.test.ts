@@ -22,6 +22,7 @@ function char(overrides: Partial<CharacterCloseState>): CharacterCloseState {
     lastSyncedAtMs: NOON.getTime() - 3 * 3_600_000,
     closedDates: new Set<string>(),
     failedAttempts: {},
+    failedSyncAttemptsToday: 0,
     hasActivity: true,
     firstActivityDate: "2020-01-01",
     ...overrides,
@@ -87,10 +88,25 @@ describe("planAutoCloseTick", () => {
     const c = char({
       firstActivityDate: "2026-09-11",
       closedDates: new Set([YESTERDAY]),
-      lastSyncedAtMs: NOON.getTime() - 25 * 3_600_000, // 25h ago, over the 20h max age
+      lastSyncedAtMs: NOON.getTime() - 5 * 3_600_000, // 5h ago, over the 4h max age
     });
     expect(planAutoCloseTick(NOON, [c], CFG)).toEqual([
       { type: "sync", characterId: 1, characterName: "Test Char", reason: "stale" },
+    ]);
+  });
+
+  it("stops syncing a character that exhausted its daily sync attempts — the retry-hammer guard", () => {
+    const capped = char({
+      lastSyncedAtMs: null,
+      failedSyncAttemptsToday: DEFAULT_AUTOCLOSE_CONFIG.maxSyncAttemptsPerDay,
+      hasActivity: false,
+      firstActivityDate: null,
+    });
+    expect(planAutoCloseTick(NOON, [capped], CFG)).toEqual([]);
+    // between cap and zero: still retries, with a distinct reason
+    const retrying = char({ lastSyncedAtMs: null, failedSyncAttemptsToday: 1, hasActivity: false, firstActivityDate: null });
+    expect(planAutoCloseTick(NOON, [retrying], CFG)).toEqual([
+      { type: "sync", characterId: 1, characterName: "Test Char", reason: "retry_after_failure" },
     ]);
   });
 
@@ -164,5 +180,12 @@ describe("planAutoCloseTick", () => {
   it("rolls the target date at midnight UTC (a 00:15 tick targets the day that just ended)", () => {
     expect(previousUtcDayOf(new Date("2026-09-12T00:15:00Z"))).toBe("2026-09-11");
     expect(previousUtcDayOf(new Date("2026-09-11T23:45:00Z"))).toBe("2026-09-10");
+  });
+
+  it("validates maxSyncAttemptsPerDay like every other threshold", () => {
+    expect(mergeAutoCloseConfig({ maxSyncAttemptsPerDay: 10 }).maxSyncAttemptsPerDay).toBe(10);
+    expect(mergeAutoCloseConfig({ maxSyncAttemptsPerDay: -1 }).maxSyncAttemptsPerDay).toBe(
+      DEFAULT_AUTOCLOSE_CONFIG.maxSyncAttemptsPerDay
+    );
   });
 });
