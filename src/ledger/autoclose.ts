@@ -97,6 +97,12 @@ export interface CharacterCloseState {
   failedAttempts: Record<string, number>;
   /** Failed sync attempts for this character today (UTC) — caps retry hammering on dead tokens/ESI outages. */
   failedSyncAttemptsToday: number;
+  /** True when the character's most recent sync attempt failed on token refresh
+   *  (dead/expired refresh token). The heartbeat skips such characters entirely —
+   *  ESI tools still fail loudly with an esi_login prompt on actual use, so
+   *  nothing autonomous should keep retrying auth. Clears after a successful
+   *  esi_login + sync. */
+  authBroken: boolean;
   /** Any wallet journal/transaction rows exist for this character. */
   hasActivity: boolean;
   /** UTC date (YYYY-MM-DD) of the earliest synced activity, null if none. */
@@ -162,6 +168,7 @@ export function planAutoCloseTick(
   const nowHour = utcHourFloat(now);
 
   for (const c of chars) {
+    if (c.authBroken) continue; // dead token: hands off until esi_login — see CharacterCloseState.authBroken
     const closes: AutoCloseAction[] = [];
 
     if (c.hasActivity && c.firstActivityDate) {
@@ -256,6 +263,21 @@ export function gatherCharacterStates(): CharacterCloseState[] {
          GROUP BY close_date`
       )
       .all(c.characterId) as Array<{ close_date: string | null; n: number }>;
+    // The character's LATEST sync attempt (any day): if it died on token
+    // refresh, auth is broken until someone runs esi_login.
+    const lastSyncRun = db
+      .prepare(
+        `SELECT outcome, error, started_at FROM autoclose_runs
+         WHERE character_id = ? AND kind = 'sync' ORDER BY id DESC LIMIT 1`
+      )
+      .get(c.characterId) as { outcome: string; error: string | null; started_at: string } | undefined;
+    // Broken only while nothing has touched the tokens since the failure —
+    // an esi_login (or later successful refresh) writes updated_at, which
+    // hands the character back to the heartbeat for a retry.
+    const authBroken =
+      lastSyncRun?.outcome === "failed" &&
+      !!lastSyncRun.error?.includes("Token refresh failed") &&
+      c.updatedAt.getTime() < new Date(lastSyncRun.started_at).getTime();
     const todayStartIso = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).toISOString();
     const syncFailRow = db
       .prepare(
@@ -283,6 +305,7 @@ export function gatherCharacterStates(): CharacterCloseState[] {
       closedDates: new Set(closedRows.map((r) => r.close_date)),
       failedAttempts,
       failedSyncAttemptsToday: syncFailRow?.n ?? 0,
+      authBroken,
       hasActivity: !!actRow?.first,
       firstActivityDate: actRow?.first ? actRow.first.slice(0, 10) : null,
     };

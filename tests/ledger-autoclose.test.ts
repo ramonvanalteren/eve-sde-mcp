@@ -23,6 +23,7 @@ function char(overrides: Partial<CharacterCloseState>): CharacterCloseState {
     closedDates: new Set<string>(),
     failedAttempts: {},
     failedSyncAttemptsToday: 0,
+    authBroken: false,
     hasActivity: true,
     firstActivityDate: "2020-01-01",
     ...overrides,
@@ -93,6 +94,16 @@ describe("planAutoCloseTick", () => {
     expect(planAutoCloseTick(NOON, [c], CFG)).toEqual([
       { type: "sync", characterId: 1, characterName: "Test Char", reason: "stale" },
     ]);
+  });
+
+  it("leaves auth-broken characters entirely alone (dead token: hands off until esi_login)", () => {
+    const c = char({
+      authBroken: true,
+      // even with a stale sync, an open close gap, and activity — nothing is planned
+      lastSyncedAtMs: null,
+      firstActivityDate: "2026-09-11",
+    });
+    expect(planAutoCloseTick(NOON, [c], CFG)).toEqual([]);
   });
 
   it("stops syncing a character that exhausted its daily sync attempts — the retry-hammer guard", () => {

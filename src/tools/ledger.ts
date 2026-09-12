@@ -5,7 +5,7 @@ import { enrichTypeName, jsonResult } from "../utils.js";
 import { syncWalletLedger } from "../ledger/sync.js";
 import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredCloseRange } from "../ledger/close.js";
 import { getLedgerDb } from "../ledger/db.js";
-import { autoCloseHeartbeatInfo } from "../ledger/autoclose.js";
+import { autoCloseHeartbeatInfo, gatherCharacterStates } from "../ledger/autoclose.js";
 import {
   matchBrokerFees,
   computeOpenChainSunkFees,
@@ -174,10 +174,17 @@ export function registerLedgerTools(server: McpServer): void {
 
   server.tool(
     "get_autoclose_status",
-    "Inspect the server's autonomous daily-close heartbeat: whether it's active, its config (from ~/.eve-sde/config.json -> autoClose), per-character sync/close coverage of recent days, and its recent run log (autoclose_runs — every sync/close attempt, successful or failed). The heartbeat syncs the wallet ledger and closes every completed UTC day after EVE downtime (~11:30 UTC default) while the server runs — no one needs to ask. Use this to check coverage after downtime/gaps (a day only stays closeable within ESI's ~30-day journal window) and to see why, if anything, a day didn't close.",
+    "Inspect the server's autonomous daily-close heartbeat: whether it's active, its config (from ~/.eve-sde/config.json -> autoClose), per-character sync/close coverage of recent days, and its recent run log (autoclose_runs — every sync/close attempt, successful or failed). The heartbeat syncs the wallet ledger and closes every completed UTC day after EVE downtime (~11:30 UTC default) while the server runs — no one needs to ask. Characters whose token refresh is failing are listed under authIssues: the heartbeat leaves them alone until esi_login, and their ESI tools fail with a re-login prompt on use. Use this to check coverage after downtime/gaps (a day only stays closeable within ESI's ~30-day journal window) and to see why, if anything, a day didn't close.",
     {},
     async () => {
       const heartbeat = autoCloseHeartbeatInfo();
+      const authIssues = gatherCharacterStates()
+        .filter((c) => c.authBroken)
+        .map((c) => ({
+          characterId: c.characterId,
+          characterName: c.characterName,
+          issue: "token refresh failing (dead/expired refresh token) — heartbeat leaves this character alone; run esi_login before using its ESI tools",
+        }));
       const db = getLedgerDb();
       const today = new Date().toISOString().slice(0, 10);
       const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
@@ -232,7 +239,7 @@ export function registerLedgerTools(server: McpServer): void {
         .prepare(`SELECT * FROM autoclose_runs ORDER BY started_at DESC, id DESC LIMIT 25`)
         .all() as Array<Record<string, unknown>>;
 
-      return jsonResult({ heartbeat, characters, recentRuns: runs });
+      return jsonResult({ heartbeat, authIssues, characters, recentRuns: runs });
     }
   );
 

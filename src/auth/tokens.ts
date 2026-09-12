@@ -123,15 +123,19 @@ export function listCharacters(): Array<{
   characterId: number;
   characterName: string;
   expiresAt: Date;
+  /** Last token write (esi_login or a successful refresh) — used to detect
+   *  auth state changes after a recorded failure. */
+  updatedAt: Date;
   scopes: string;
 }> {
   const rows = getAuthDb()
-    .prepare("SELECT character_id, character_name, expires_at, scopes FROM auth_tokens ORDER BY updated_at DESC")
+    .prepare("SELECT character_id, character_name, expires_at, updated_at, scopes FROM auth_tokens ORDER BY updated_at DESC")
     .all() as any[];
   return rows.map((r) => ({
     characterId: r.character_id,
     characterName: r.character_name,
     expiresAt: new Date(r.expires_at),
+    updatedAt: new Date(r.updated_at),
     scopes: r.scopes,
   }));
 }
