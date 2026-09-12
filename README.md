@@ -65,7 +65,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | Tool | Description |
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
-| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting. BOM linkage: delivered manufacturing jobs consume material FIFO lots and create product lots at all-in basis, with a production section in the report |
 | `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. both directions of relisting-fee attribution and all-in net P&L per position |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
@@ -99,11 +99,17 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
   "stationFees": {
     "60003760": { "brokerFeePct": 1.491, "label": "Jita 4-4 CNAP" },
     "1044752365771": { "brokerFeePct": 0.5, "brokerFeeFlat": 100, "label": "Perimeter 0.0% Neutral States Market HQ" }
+  },
+  "blueprintME": {
+    "2047": 10,
+    "1404": 8
   }
 }
 ```
 
 `get_station_fees` shows the resolution per station and lists any unconfigured stations you trade at.
+
+`blueprintME` pins blueprint Material Efficiency levels (keyed by blueprint type id) for the close's bill-of-materials linkage — ESI exposes no per-BPO ME, so the real levels are pinned here. Unlisted blueprints default to ME 0 (base quantities, conservative basis). The daily close consumes delivered manufacturing jobs' materials from FIFO buy lots oldest-first and creates product lots at all-in basis (materials + installation); product sells then match real cost basis, and the close report carries a production section.
 
 ### Killmails (ESI)
 

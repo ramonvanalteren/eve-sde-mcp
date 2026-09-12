@@ -1,6 +1,6 @@
 ---
 name: eve-industry
-description: "Use this skill for EVE industry: verifying build margins before committing manufacturing runs (price_build — materials at live prices + installation vs product sell), reviewing active production jobs against live margins, selecting new BPO candidates, and industry knowledge (ME/TE, facilities, cost indices, invention). Trigger on industry, manufacturing, blueprint, BPO, build cost, build margin, 'what should I build', or production review questions. Never commit runs on an unverified margin — the founding case was a 400-run job at +0.9% discovered only by post-hoc audit. Production economics are NOT yet linked in the daily-close ledger — do not read the close as production P&L."
+description: "Use this skill for EVE industry: verifying build margins before committing manufacturing runs (price_build — materials at live prices + installation vs product sell), reviewing active production jobs against live margins, selecting new BPO candidates (scan_builds screens every obtainable T1 BPO and live-verifies), and industry knowledge (ME/TE, facilities, cost indices, invention). Trigger on industry, manufacturing, blueprint, BPO, build cost, build margin, 'what should I build', or production review questions. Never commit runs on an unverified margin — the founding case was a 400-run job at +0.9% discovered only by post-hoc audit. Production is bill-of-materials linked in the daily close (materials consumed at delivery, product lots at all-in basis) — read production P&L from the close's production section and per-position realized numbers."
 ---
 
 # EVE Industry Skill — Build-Margin Discipline
@@ -22,14 +22,18 @@ A live T1 module production line, audited 2026-09: **5 of 6 lines healthy** (+13
 
 **Quantified at founding:** ~48M ISK of production capital (minerals, PI components, BPOs) plus ~60M of skill books sit in the ledger as positions that can never close.
 
-## The ledger is blind to production — read this before any P&L question
+## The ledger and production — how BOM linkage works
 
-The daily-close ledger pairs buys and sells of the **same item**. Production consumes materials in jobs and sells different items:
+The daily close carries bill-of-materials linkage: when a manufacturing job is **DELIVERED**, its ME-adjusted materials are consumed from open FIFO buy lots (oldest-first), and a synthetic **product lot** is created at all-in unit basis (matched material cost + installation / units). Product sells then match that lot like any other — realized P&L on produced items is real, and the close reports a **production section** (units produced, material cost, installation, unit basis, missing-basis flags).
 
-- Materials and BPOs sit forever as "open positions" at cost, marked to market daily as if awaiting a trade exit.
-- Product sells (once jobs deliver) book with **zero cost basis** — realized P&L on product lines is inflated by the full production cost, and the material cost never realizes.
+Rules and caveats:
+- **ME is config-pinned** (`blueprintME` in ~/.eve-sde/config.json, keyed by blueprint type id). ESI exposes no per-BPO ME, so pin the real levels; the default ME 0 uses base quantities — a conservative basis that slightly overstates material use.
+- **Jobs count at DELIVERY.** Output sitting undelivered in the facility is unaccounted — deliver jobs for the close to see them.
+- **Materials without buy-lot basis** (mined, refined, PI-sourced, pre-ledger buys) consume at cost 0 and are flagged in the close — basis understated, never guessed.
+- **Research jobs** (ME/TE/copying) are not capitalized into the BPO — their installation cost stays journal cashflow; value them with the skill's research-payback framing, not the ledger.
+- **BPOs still sit as open positions** at their purchase cost — capital assets, not inventory awaiting sale; the new-candidates workflow's amortization framing handles them.
 
-Until bill-of-materials linkage is built into the close engine (planned), **treat the daily close as trading-only truth**. Production economics come from `price_build` and the production review, not from the close. If asked "how is production doing", never answer from the ledger.
+FIFO basis can differ from the blend a price_build verification used — the close consumes your *oldest* lots first (the founding dead line verified at +0.9% blended, but realized −16/unit against her actual oldest Mexallon lot). The close is the truth of what a line actually earned; price_build is the truth of whether to commit the next batch.
 
 ## Dispatch map — which reference files to read
 

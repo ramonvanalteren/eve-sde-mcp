@@ -46,6 +46,21 @@ interface EsiHistoricalOrder extends EsiOpenOrder {
   state: "cancelled" | "expired" | "fulfilled";
 }
 
+interface EsiIndustryJob {
+  job_id: number;
+  activity_id: number;
+  blueprint_type_id: number;
+  product_type_id?: number;
+  runs: number;
+  successful_runs?: number;
+  cost?: number;
+  start_date: string;
+  end_date: string;
+  completed_date?: string;
+  status: string;
+  facility_id: number;
+}
+
 // ESI's wallet history is bounded to ~30 days regardless of how far back we
 // walk, so this is a safety valve against a runaway loop, not the real limit.
 const MAX_TRANSACTION_PAGES = 20;
@@ -105,7 +120,7 @@ export interface SyncResult {
 export async function syncWalletLedger(characterId?: number): Promise<SyncResult> {
   const char = await getActiveCharacter(characterId);
 
-  const [journal, transactions, openOrders, orderHistory] = await Promise.all([
+  const [journal, transactions, openOrders, orderHistory, industryJobs] = await Promise.all([
     esiGetAll<EsiWalletJournalEntry>(`/characters/${char.characterId}/wallet/journal/`, {
       characterId: char.characterId,
     }),
@@ -114,6 +129,9 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
     esiGetAll<EsiHistoricalOrder>(`/characters/${char.characterId}/orders/history/`, {
       characterId: char.characterId,
     }),
+    esiGetAll<EsiIndustryJob>(`/characters/${char.characterId}/industry/jobs/?include_completed=true`, {
+      characterId: char.characterId,
+    }).catch(() => [] as EsiIndustryJob[]),
   ]);
 
   const db = getLedgerDb();
@@ -138,6 +156,19 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
       state = excluded.state,
       escrow = excluded.escrow,
       synced_at = datetime('now')
+  `);
+  const upsertIndustryJob = db.prepare(`
+    INSERT INTO industry_jobs
+      (job_id, character_id, activity_id, blueprint_type_id, product_type_id, runs, successful_runs, cost, start_date, end_date, completed_date, status, facility_id, bom_applied)
+    VALUES
+      (@jobId, @characterId, @activityId, @blueprintTypeId, @productTypeId, @runs, @successfulRuns, @cost, @startDate, @endDate, @completedDate, @status, @facilityId, 0)
+    ON CONFLICT(job_id) DO UPDATE SET
+      successful_runs = excluded.successful_runs,
+      cost = excluded.cost,
+      end_date = excluded.end_date,
+      completed_date = excluded.completed_date,
+      status = excluded.status
+      -- bom_applied is deliberately NOT updated: a processed job stays processed
   `);
   const upsertSyncState = db.prepare(`
     INSERT INTO sync_state (character_id, last_synced_at, journal_entries, transactions)
@@ -184,6 +215,23 @@ export async function syncWalletLedger(characterId?: number): Promise<SyncResult
         journalRefId: tx.journal_ref_id ?? null,
       });
       transactionsInserted += res.changes;
+    }
+    for (const j of industryJobs) {
+      upsertIndustryJob.run({
+        jobId: j.job_id,
+        characterId: char.characterId,
+        activityId: j.activity_id,
+        blueprintTypeId: j.blueprint_type_id,
+        productTypeId: j.product_type_id ?? null,
+        runs: j.runs,
+        successfulRuns: j.successful_runs ?? null,
+        cost: j.cost ?? null,
+        startDate: j.start_date,
+        endDate: j.end_date,
+        completedDate: j.completed_date ?? null,
+        status: j.status,
+        facilityId: j.facility_id ?? null,
+      });
     }
     for (const o of openOrders) {
       upsertOrder.run({

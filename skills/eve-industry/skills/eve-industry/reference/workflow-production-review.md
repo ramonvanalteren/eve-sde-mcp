@@ -29,6 +29,8 @@ When a batch delivers:
 - If the margin went negative between completion and listing: decide between holding the output (capital parked in inventory — usually wrong for a thin-margin item) and selling at the best positive net (usually right; recover capital into the next healthy line).
 - Reprocessing the product back into minerals is almost never right for T1 modules (reprocessing yields < build cost at typical skills) — mentioned only because it gets asked.
 
-## The ledger reminder
+## The ledger and the review — what each is for
 
-Do not pull production performance from the daily close — the ledger is blind to production (see the skill hub). The production review IS the production P&L: per-line margins, job profits, slot economics, all from price_build over live data.
+The daily close now carries production via BOM linkage (see the hub): delivered jobs consume material lots and create product lots at all-in basis, the close reports a production section, and per-position realized P&L on produced items is real. Use it for **what lines actually earned** (FIFO truth — your oldest material lots, which can be worse than the blend price_build verified: the founding dead line verified +0.9% but realized −16/unit on oldest-lot basis).
+
+The production review (this workflow) is for **decisions** — keep/relist/kill/scale, margins for the *next* batch at replacement prices, slot economics. Close = history; review = future.

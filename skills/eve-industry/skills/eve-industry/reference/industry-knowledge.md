@@ -39,6 +39,6 @@ Reactions (moon mining chain, boosters) are the same discipline — materials in
 - **Metallurgy/Research** for ME/TE research speed.
 - Verify character gaps with the skill-check tooling before planning a line that depends on them.
 
-## The ledger gap (repeated deliberately)
+## The ledger and production (BOM linkage — shipped)
 
-Until bill-of-materials linkage lands in the close engine, materials and BPOs sit as never-closing ledger positions and product sells book zero-basis — production P&L comes from price_build and the production review, never from the daily close. When BOM linkage ships, this file and the skill hub get rewritten around it — until then, every P&L answer goes through the workflows, not the ledger.
+Delivered manufacturing jobs are bill-of-materials linked in the daily close: materials consume from FIFO buy lots oldest-first, a synthetic product lot is created at all-in basis (materials + installation / units), the close reports a production section, and per-position realized P&L on produced items is correct. Pin real ME levels in config (`blueprintME`, keyed by blueprint type id) — the default ME 0 is conservative. Jobs count at delivery; research jobs stay journal cashflow; materials without buy basis are flagged, not guessed. Remaining honest gap: BPOs themselves sit as open positions at cost (capital assets — amortize them in candidate decisions, not the close).
