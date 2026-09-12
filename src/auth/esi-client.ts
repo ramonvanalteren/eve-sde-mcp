@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { refreshAccessToken, startLoginFlow, waitForLogin } from "./oauth.js";
+import { refreshAccessToken, startLoginFlow, waitForLogin, getPendingLogin } from "./oauth.js";
 import { getCurrentCharacter, updateTokens, getTokens, storeTokens, setCurrentCharacterId } from "./tokens.js";
 import type { StoredCharacter } from "./tokens.js";
 
@@ -38,64 +38,73 @@ export function isDeadRefreshToken(underlyingMsg: string): boolean {
   return underlyingMsg.includes("invalid_grant");
 }
 
-/** The error a caller sees when a token refresh fails. */
-export function refreshFailureMessage(characterName: string, underlyingMsg: string, autoLoginStarted: boolean): string {
+/** The error a caller sees when re-authentication didn't happen or failed. */
+export function refreshFailureMessage(characterName: string, underlyingMsg: string): string {
   return (
     `Token refresh failed for ${characterName}: ${underlyingMsg}. ` +
-    (autoLoginStarted
-      ? `A login page has been opened in your browser — authenticate as ${characterName}, then re-run this tool.`
-      : `Use the esi_login tool to re-authenticate.`)
+    `Use the esi_login tool to re-authenticate.`
   );
 }
 
-// Auto-login: when a tool call hits a definitively dead refresh token, open
-// the SSO login flow in the browser instead of only suggesting it. The
-// triggering tool call still fails immediately (no 5-minute hang); a
-// background continuation stores the tokens once the user authenticates and
-// logs completion to stderr. Cooldown keeps a retry loop of failing tool
-// calls from opening a browser tab every time.
+// Auto-login, wait-and-continue: when a tool call fails a token refresh
+// with invalid_grant, start the SSO login flow (browser opens) and WAIT for
+// the user to authenticate — up to the flow's 5-minute timeout — instead of
+// failing fast. On success the original call continues with the fresh
+// token. Concurrent dead-token calls share one in-flight flow rather than
+// superseding each other. A cooldown after a failed/abandoned flow stops a
+// retry loop from reopening the browser every call.
 let lastAutoLoginAt = 0;
 const AUTO_LOGIN_COOLDOWN_MS = 60_000;
 
-async function triggerAutoLogin(): Promise<boolean> {
-  if (Date.now() - lastAutoLoginAt < AUTO_LOGIN_COOLDOWN_MS) return false;
-  lastAutoLoginAt = Date.now();
-  let clientId: string;
-  try {
-    clientId = readClientId();
-  } catch {
-    return false; // no client id configured — a manual esi_login with client_id is needed
-  }
-  try {
+type AutoLoginOutcome =
+  | { status: "authenticated"; character: StoredCharacter }
+  | { status: "mismatch"; authedAs: string }
+  | { status: "failed" };
+
+async function autoLoginAndWait(
+  requested: StoredCharacter,
+  explicitCharacterId: number | undefined,
+  clientId: string
+): Promise<AutoLoginOutcome> {
+  let flow = getPendingLogin();
+  if (flow) {
+    process.stderr.write(`[auto-login] Login flow already in progress — waiting on it.\n`);
+  } else {
+    if (Date.now() - lastAutoLoginAt < AUTO_LOGIN_COOLDOWN_MS) return { status: "failed" };
+    lastAutoLoginAt = Date.now();
     const { authUrl } = startLoginFlow(clientId);
     try {
       const { execFile } = await import("child_process");
       execFile("open", [authUrl], () => {
-        // best-effort; if the browser didn't open, the URL is in the error text
+        // best-effort; the URL is also in stderr
       });
     } catch {
       // best-effort
     }
-    void waitForLogin().then(
-      (result) => {
-        storeTokens(result.tokens, result.character);
-        setCurrentCharacterId(result.character.characterId);
-        process.stderr.write(
-          `[auto-login] Authenticated as ${result.character.characterName} — token fixed; re-run the tool that failed.\n`
-        );
-      },
-      (err) => {
-        process.stderr.write(
-          `[auto-login] Login flow ended without success: ${err instanceof Error ? err.message : String(err)}\n`
-        );
-      }
+    process.stderr.write(
+      `[auto-login] Token for ${requested.characterName} is dead — browser opened, waiting for authentication (up to 5 minutes)...\n`
     );
-    return true;
+    flow = waitForLogin();
+  }
+
+  try {
+    const result = await flow;
+    storeTokens(result.tokens, result.character);
+    setCurrentCharacterId(result.character.characterId);
+    if (explicitCharacterId && result.character.characterId !== explicitCharacterId) {
+      process.stderr.write(
+        `[auto-login] Authenticated as ${result.character.characterName}, but this call needs ${requested.characterName}.\n`
+      );
+      return { status: "mismatch", authedAs: result.character.characterName };
+    }
+    process.stderr.write(`[auto-login] Authenticated as ${result.character.characterName} — continuing the call.\n`);
+    const restored = getTokens(result.character.characterId);
+    return restored ? { status: "authenticated", character: restored } : { status: "failed" };
   } catch (err) {
     process.stderr.write(
-      `[auto-login] Could not start login flow: ${err instanceof Error ? err.message : String(err)}\n`
+      `[auto-login] Login flow ended without success: ${err instanceof Error ? err.message : String(err)}\n`
     );
-    return false;
+    return { status: "failed" };
   }
 }
 
@@ -139,8 +148,33 @@ export async function getValidToken(
       process.stderr.write(`ESI token refreshed, valid for ${Math.round(newTokens.expiresAt.getTime() - Date.now()) / 1000}s\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const autoLogin = isDeadRefreshToken(msg) ? await triggerAutoLogin() : false;
-      throw new Error(refreshFailureMessage(character.characterName, msg, autoLogin));
+      if (isDeadRefreshToken(msg)) {
+        const outcome = await autoLoginAndWait(character, characterId, clientId);
+        if (outcome.status === "authenticated") {
+          // One refresh retry with the fresh refresh token
+          try {
+            const newTokens = await refreshAccessToken(outcome.character.refreshToken, clientId);
+            updateTokens(outcome.character.characterId, newTokens);
+            character = getTokens(outcome.character.characterId)!;
+            process.stderr.write(
+              `[auto-login] Token restored for ${character.characterName} — continuing the call.\n`
+            );
+            // fall through with a valid token — the call proceeds
+          } catch (retryErr) {
+            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            throw new Error(refreshFailureMessage(outcome.character.characterName, retryMsg));
+          }
+        } else if (outcome.status === "mismatch") {
+          throw new Error(
+            `Authenticated as ${outcome.authedAs}, but this call needs ${character.characterName} — their token is still dead. ` +
+            `Run esi_login again and authenticate as ${character.characterName}, then re-run this tool.`
+          );
+        } else {
+          throw new Error(refreshFailureMessage(character.characterName, msg));
+        }
+      } else {
+        throw new Error(refreshFailureMessage(character.characterName, msg));
+      }
     }
   }
 

@@ -11,22 +11,14 @@ describe("dead-token auto-login messaging", () => {
     expect(isDeadRefreshToken("")).toBe(false);
   });
 
-  it("when auto-login started, the error says so and names the character", () => {
-    const msg = refreshFailureMessage("Mazarian", invalidGrant, true);
+  it("the fallback error (login didn't complete) points at esi_login", () => {
+    const msg = refreshFailureMessage("Mazarian", invalidGrant);
     expect(msg).toContain("Token refresh failed for Mazarian");
-    expect(msg).toContain("A login page has been opened in your browser");
-    expect(msg).toContain("authenticate as Mazarian");
-    expect(msg).not.toContain("Use the esi_login tool");
-  });
-
-  it("when auto-login could not start (cooldown/no client id), it falls back to the manual instruction", () => {
-    const msg = refreshFailureMessage("Mazarian", invalidGrant, false);
     expect(msg).toContain("Use the esi_login tool to re-authenticate.");
-    expect(msg).not.toContain("browser");
   });
 
-  it("transient failures never mention a browser — only dead tokens trigger the flow", () => {
-    const msg = refreshFailureMessage("Helga Syrobne", serverDown, false);
+  it("transient failures use the same message shape — they never open a browser", () => {
+    const msg = refreshFailureMessage("Helga Syrobne", serverDown);
     expect(msg).toContain("Token refresh failed for Helga Syrobne");
     expect(msg).toContain("Use the esi_login tool to re-authenticate.");
   });
