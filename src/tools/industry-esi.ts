@@ -4,6 +4,7 @@ import { getDatabase } from "../database.js";
 import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
 import { enrichTypeName, likeContains, jsonResult } from "../utils.js";
 import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./market.js";
+import { resolveLocations, type ResolvedLocation } from "./structures.js";
 import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
 
@@ -354,18 +355,35 @@ export function registerIndustryEsiTools(server: McpServer): void {
       // Resolve the blueprint: explicit typeID, or the manufacturing blueprint for a product name
       let bpTypeId = blueprint_type_id;
       if (!bpTypeId && product_name) {
-        const row = db
+        // Exact product name first, and only market-obtainable blueprints —
+        // a bare LIKE resolver once matched "'Gonzo' Damage Control I"
+        // (a faction variant with ~10bn ISK of relic materials) instead of
+        // the plain T1 item the user meant.
+        let row = db
           .prepare(
             `SELECT iap.typeID as bpTypeId
              FROM industryActivityProducts iap
-             JOIN invTypes p ON iap.productTypeID = p.typeID
-             WHERE p.typeName LIKE ? ESCAPE '\\' AND iap.activityID = 1
-             ORDER BY p.typeName
+             JOIN invTypes p ON p.typeID = iap.productTypeID
+             JOIN invTypes bp ON bp.typeID = iap.typeID
+             WHERE p.typeName = ? AND iap.activityID = 1 AND bp.marketGroupID IS NOT NULL
              LIMIT 1`
           )
-          .get(likeContains(product_name)) as { bpTypeId: number } | undefined;
+          .get(product_name) as { bpTypeId: number } | undefined;
         if (!row) {
-          return { content: [{ type: "text", text: `No manufacturing blueprint found for a product matching "${product_name}".` }] };
+          row = db
+            .prepare(
+              `SELECT iap.typeID as bpTypeId
+               FROM industryActivityProducts iap
+               JOIN invTypes p ON p.typeID = iap.productTypeID
+               JOIN invTypes bp ON bp.typeID = iap.typeID
+               WHERE p.typeName LIKE ? ESCAPE \\ AND iap.activityID = 1 AND bp.marketGroupID IS NOT NULL
+               ORDER BY p.typeName
+               LIMIT 1`
+            )
+            .get(likeContains(product_name)) as { bpTypeId: number } | undefined;
+        }
+        if (!row) {
+          return { content: [{ type: "text", text: `No manufacturing blueprint found for a product matching "${product_name}" (market-obtainable blueprints only — faction/named variants are excluded).` }] };
         }
         bpTypeId = row.bpTypeId;
       }
@@ -464,6 +482,15 @@ export function registerIndustryEsiTools(server: McpServer): void {
       if (activity) enriched = enriched.filter((j) => j.activity.toLowerCase() === activity.toLowerCase());
       if (status) enriched = enriched.filter((j) => j.status === status);
 
+      // Resolve facility ids to names/systems — NPC stations from the SDE,
+      // Upwell structures via authenticated ESI (see structures.ts)
+      const facilityIds = [...new Set(jobs.map((j) => j.facility_id))];
+      const locations = await resolveLocations(char.characterId, facilityIds);
+      enriched = enriched.map((j) => ({
+        ...j,
+        facility: (locations.get(String(j.facilityId)) ?? null) as ResolvedLocation | null,
+      }));
+
       return jsonResult({
         characterName: char.characterName,
         activeJobs: enriched.filter((j) => j.status === "active").length,
@@ -561,7 +588,23 @@ export function registerIndustryEsiTools(server: McpServer): void {
         enriched = enriched.filter((a) => a.locationId === location_id);
       }
 
-      return jsonResult({ characterName: char.characterName, assetCount: enriched.length, assets: enriched });
+      // Resolve location ids to names/systems (SDE stations + ESI structures)
+      // and report the unique set alongside the items
+      const uniqueLocationIds = [...new Set(assets.map((a) => a.location_id))];
+      const locations = await resolveLocations(char.characterId, uniqueLocationIds);
+      const locationMap: Record<string, ResolvedLocation> = {};
+      for (const [id, info] of locations) locationMap[id] = info;
+      enriched = enriched.map((a) => ({
+        ...a,
+        locationName: locationMap[String(a.locationId)]?.name ?? null,
+      }));
+
+      return jsonResult({
+        characterName: char.characterName,
+        assetCount: enriched.length,
+        locations: Object.values(locationMap),
+        assets: enriched,
+      });
     }
   );
 

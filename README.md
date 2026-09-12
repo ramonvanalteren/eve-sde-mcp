@@ -23,6 +23,7 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `search_systems` | Search solar systems by name |
 | `get_system` | System details, connected systems, stations |
 | `get_region` | Region with constellations |
+| `get_structure` | Resolve a station or player-structure id to name, solar system, structure type, and the system's industry cost indices — NPC stations from the SDE, Upwell structures via authenticated ESI (esi-universe.read_structures.v1). Also enriches get_industry_jobs and get_character_assets with resolved facility/location names |
 | `get_station` | Station details |
 | `get_blueprint` | Blueprint materials, products, skills, time |
 | `search_blueprints` | Find blueprints by product name |
@@ -211,7 +212,7 @@ To use the live character data tools, you need an EVE SSO application:
    ```
 3. Use the `esi_login` tool — it opens a browser for EVE SSO login and stores encrypted tokens locally
 
-Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Scopes include skill reading, wallet, market, industry, assets, contracts, and fittings (read+write). Multi-character support is built in.
+Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Scopes include skill reading, wallet, market, industry, assets, blueprints, universe structures, contracts, and fittings (read+write). Multi-character support is built in.
 
 ## Development
 

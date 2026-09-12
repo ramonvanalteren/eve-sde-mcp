@@ -12,7 +12,7 @@ The reference layer the workflows draw on. Honest scope marker throughout: the M
 ## Facilities and structure bonuses
 
 - **NPC stations**: fixed-install base index, no rig bonuses, typically higher tax; always available, no access risk.
-- **Engineering complexes / structures**: rig bonuses (manufacturing time, material cost for T2 rigs; assembly arrays multiply specific lines) and player-set tax; access can change; the SDE has **no facility data** — structure bonuses and tax are read in the client (facility window) and are part of the facility's real margin.
+- **Engineering complexes / structures**: rig bonuses (manufacturing time, material cost for T2 rigs; assembly arrays multiply specific lines) and player-set tax; access can change. `get_structure` resolves a facility id from jobs/assets to its name, system, structure type, and the system's cost indices (NPC stations come from the SDE; Upwell structures need esi-universe.read_structures.v1 + docking access). Rig bonuses and the structure's tax rate remain in-game data (facility window) — they are part of the facility's real margin.
 - When a production line's margins are computed at Jita prices but installed in a structure, the installation number (in-client dialog) is the only trustworthy facility-cost figure — that's why price_build takes it as an explicit input.
 
 ## System cost indices
