@@ -1,0 +1,9 @@
+{
+  "name": "eve-trading",
+  "description": "Hybrid station trading for Helga Syrobne: buy orders at Perimeter's Neutral States Market HQ (range 1 into Jita 4-4), sell orders at Jita 4-4. Covers new position selection from saved A4E tier URLs, buy/sell portfolio review, inventory risk, pipeline performance, and daily close against the eve-sde-mcp ledger. Not for repricing/undercut checks.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Ramon van Alteren"
+  },
+  "repository": "https://github.com/ramonvanalteren/eve-sde-mcp"
+}
