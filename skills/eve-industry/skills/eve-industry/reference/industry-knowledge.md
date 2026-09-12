@@ -12,7 +12,7 @@ The reference layer the workflows draw on. Honest scope marker throughout: the M
 ## Facilities and structure bonuses
 
 - **NPC stations**: fixed-install base index, no rig bonuses, typically higher tax; always available, no access risk.
-- **Engineering complexes / structures**: rig bonuses (manufacturing time, material cost for T2 rigs; assembly arrays multiply specific lines) and player-set tax; access can change; the SDE has **no facility data** — structure bonuses and tax are read in the client (facility window) and are part of the facility's real margin.
+- **Engineering complexes / structures**: rig bonuses (manufacturing time, material cost for T2 rigs; assembly arrays multiply specific lines) and player-set tax; access can change. `get_structure` resolves a facility id from jobs/assets to its name, system, structure type, and the system's cost indices (NPC stations come from the SDE; Upwell structures need esi-universe.read_structures.v1 + docking access). Rig bonuses and the structure's tax rate remain in-game data (facility window) — they are part of the facility's real margin.
 - When a production line's margins are computed at Jita prices but installed in a structure, the installation number (in-client dialog) is the only trustworthy facility-cost figure — that's why price_build takes it as an explicit input.
 
 ## System cost indices
@@ -39,6 +39,6 @@ Reactions (moon mining chain, boosters) are the same discipline — materials in
 - **Metallurgy/Research** for ME/TE research speed.
 - Verify character gaps with the skill-check tooling before planning a line that depends on them.
 
-## The ledger gap (repeated deliberately)
+## The ledger and production (BOM linkage — shipped)
 
-Until bill-of-materials linkage lands in the close engine, materials and BPOs sit as never-closing ledger positions and product sells book zero-basis — production P&L comes from price_build and the production review, never from the daily close. When BOM linkage ships, this file and the skill hub get rewritten around it — until then, every P&L answer goes through the workflows, not the ledger.
+Delivered manufacturing jobs are bill-of-materials linked in the daily close: materials consume from FIFO buy lots oldest-first, a synthetic product lot is created at all-in basis (materials + installation / units), the close reports a production section, and per-position realized P&L on produced items is correct. Each job's BPO ME resolves automatically from the character's synced ESI blueprints (exact item match), with config `blueprintME` as type-keyed fallback and ME 0 as the conservative floor. Jobs count at delivery; research jobs stay journal cashflow; materials without buy basis are flagged, not guessed. Remaining honest gap: BPOs themselves sit as open positions at cost (capital assets — amortize them in candidate decisions, not the close).

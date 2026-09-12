@@ -23,6 +23,7 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | `search_systems` | Search solar systems by name |
 | `get_system` | System details, connected systems, stations |
 | `get_region` | Region with constellations |
+| `get_structure` | Resolve a station or player-structure id to name, solar system, structure type, and the system's industry cost indices — NPC stations from the SDE, Upwell structures via authenticated ESI (esi-universe.read_structures.v1). Also enriches get_industry_jobs and get_character_assets with resolved facility/location names |
 | `get_station` | Station details |
 | `get_blueprint` | Blueprint materials, products, skills, time |
 | `search_blueprints` | Find blueprints by product name |
@@ -65,7 +66,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | Tool | Description |
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
-| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting |
+| `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting. BOM linkage: delivered manufacturing jobs consume material FIFO lots and create product lots at all-in basis, with a production section in the report |
 | `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. both directions of relisting-fee attribution and all-in net P&L per position |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
@@ -99,11 +100,17 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
   "stationFees": {
     "60003760": { "brokerFeePct": 1.491, "label": "Jita 4-4 CNAP" },
     "1044752365771": { "brokerFeePct": 0.5, "brokerFeeFlat": 100, "label": "Perimeter 0.0% Neutral States Market HQ" }
+  },
+  "blueprintME": {
+    "2047": 10,
+    "1404": 8
   }
 }
 ```
 
 `get_station_fees` shows the resolution per station and lists any unconfigured stations you trade at.
+
+`blueprintME` is the FALLBACK for the close's bill-of-materials ME resolution (keyed by blueprint type id). The primary source is the character's synced ESI blueprints — each delivered job's own BPO is matched by item id for its exact ME (`get_character_blueprints`; requires `esi-characters.read_blueprints.v1`, in the default login scope set since this feature — re-auth once if your token predates it). Unlisted and unsynced blueprints default to ME 0 (base quantities, conservative basis). The daily close consumes delivered manufacturing jobs' materials from FIFO buy lots oldest-first and creates product lots at all-in basis (materials + installation); product sells then match real cost basis, and the close report carries a production section.
 
 ### Killmails (ESI)
 
@@ -131,6 +138,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `get_industry_jobs` | Active/recent manufacturing, research, invention jobs |
 | `get_industry_cost_indices` | System cost indices for industry (public) |
 | `price_build` | Price a manufacturing job before committing runs: ME-adjusted blueprint materials at live market prices + installation cost vs the product's net sell — unit build cost and margin on both acquisition bases (materials at sell orders = instant/conservative, at buy orders = patient), book depths, thin-book warnings. Born from a production audit that found a 400-run job committed at +0.9% margin |
+| `get_character_blueprints` | The character's blueprints with ME/TE/runs from ESI — also feeds the BOM pass's exact per-BPO ME resolution |
 | `scan_builds` | Discover industry candidates: screen every market-obtainable T1 manufacturing BPO in a category (or a specific product list — synergy mode) with ESI bulk adjusted prices, then LIVE-verify the top candidates at a station (order-book margins on both bases, 30-day traded volume, book depths, input cost-share). Screen ranks, verification decides — the closed SDE blueprint universe makes industry discovery self-sufficient, no external tier feeds needed |
 | `get_character_assets` | Items in hangars/containers with names |
 | `get_character_contracts` | Courier, item exchange, auction contracts |
@@ -204,7 +212,7 @@ To use the live character data tools, you need an EVE SSO application:
    ```
 3. Use the `esi_login` tool — it opens a browser for EVE SSO login and stores encrypted tokens locally
 
-Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Scopes include skill reading, wallet, market, industry, assets, contracts, and fittings (read+write). Multi-character support is built in.
+Tokens are encrypted at rest (AES-256-GCM) and stored in `~/.eve-sde/auth.db`. Scopes include skill reading, wallet, market, industry, assets, blueprints, universe structures, contracts, and fittings (read+write). Multi-character support is built in.
 
 ## Development
 
