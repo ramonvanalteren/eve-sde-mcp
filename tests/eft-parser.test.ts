@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { getDatabase, closeDatabase } from "../src/database.js";
-import { parseEftFormat } from "../src/tools/fittings.js";
+import { parseEftFormat } from "../src/fitting/eft.js";
 
 afterAll(() => closeDatabase());
 
@@ -113,8 +113,8 @@ FakeModuleXYZ123
 Damage Control II`;
 
     const result = parseEftFormat(db, eft);
-    expect(result.errors.length).toBe(1);
-    expect(result.errors[0]).toContain("FakeModuleXYZ123");
+    expect(result.warnings.length).toBe(1);
+    expect(result.warnings[0]).toContain("FakeModuleXYZ123");
     // Valid items still parsed
     expect(result.items.length).toBe(2);
   });

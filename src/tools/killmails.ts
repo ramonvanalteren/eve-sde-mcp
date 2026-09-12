@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, getActiveCharacter } from "../auth/esi-client.js";
+import { getSlotType } from "../fitting/eft.js";
 import { enrichTypeName, enrichSystemName, jsonResult } from "../utils.js";
 
 interface EsiKillmailRef {
@@ -146,6 +147,91 @@ export function registerKillmailTools(server: McpServer): void {
         },
         attackers: enrichedAttackers,
         attackerCount: km.attackers.length,
+      });
+    }
+  );
+
+  server.tool(
+    "killmail_to_eft",
+    "Reconstruct the victim's fit from a killmail as EFT text — including both destroyed and dropped items — ready to feed into check_fitting (exact budget analysis), price_fitting, or save_fitting. Use this when reviewing a loss (what was flown, what actually fit, what to improve) or studying a kill for doctrine ideas. Loaded charges are re-attached to their module ('Module, Charge') via the slot flag they share in the killmail.",
+    {
+      killmail_id: z.number().describe("Killmail ID (from get_recent_killmails or zkillboard)"),
+      killmail_hash: z.string().describe("Killmail hash (from get_recent_killmails or zkillboard)"),
+      fit_name: z.string().optional().describe("Name for the reconstructed fit (default: '<Ship> — killmail fit')"),
+    },
+    async ({ killmail_id, killmail_hash, fit_name }) => {
+      const km = await esiGet<EsiKillmailDetail>(
+        `/killmails/${killmail_id}/${killmail_hash}/`,
+        { public: true }
+      );
+
+      const db = getDatabase();
+      const shipName = enrichTypeName(db, km.victim.ship_type_id);
+      const name = fit_name ?? `${shipName} — killmail fit`;
+
+      interface KItem { typeName: string; typeId: number; flagName: string; qty: number; }
+      const all: KItem[] = [];
+      const dropped = km.victim.items ?? [];
+      const notes: string[] = [];
+      for (const item of dropped) {
+        const qty = (item.quantity_destroyed ?? 0) + (item.quantity_dropped ?? 0);
+        if (qty <= 0) continue;
+        const flagName = FLAG_NAMES[item.flag] ?? `Flag${item.flag}`;
+        if (flagName === "Implant") continue;
+        all.push({
+          typeName: enrichTypeName(db, item.item_type_id),
+          typeId: item.item_type_id,
+          flagName,
+          qty,
+        });
+      }
+      if (dropped.length > 0) notes.push("Reconstructed from destroyed + dropped items — a dropped-only list would be the surviving half.");
+
+      const lines: string[] = [`[${shipName}, ${name}]`];
+      const slotOrder = ["SubSystemSlot", "HiSlot", "MedSlot", "LoSlot", "RigSlot"];
+      const slotItems = new Map<string, KItem[]>();
+      for (const it of all) {
+        const m = it.flagName.match(/^(SubSystemSlot|HiSlot|MedSlot|LoSlot|RigSlot)(\d+)$/);
+        if (m) {
+          const key = m[1] + String(m[2]).padStart(2, "0");
+          if (!slotItems.has(key)) slotItems.set(key, []);
+          slotItems.get(key)!.push(it);
+        }
+      }
+      const slotRe = /^(SubSystemSlot|HiSlot|MedSlot|LoSlot|RigSlot)(\d+)$/;
+      const flagLabel = (key: string): string => {
+        const m = key.match(slotRe);
+        if (!m) return key;
+        return m[1] + m[2];
+      };
+      const keys = [...slotItems.keys()].sort((a, b) => {
+        const ai = slotOrder.indexOf(a.replace(/\d\d$/, ""));
+        const bi = slotOrder.indexOf(b.replace(/\d\d$/, ""));
+        return ai - bi || a.localeCompare(b);
+      });
+      for (const key of keys) {
+        const items = slotItems.get(key)!;
+        const modules = items.filter((it) => getSlotType(db, it.typeId) !== "cargo");
+        const charges = items.filter((it) => getSlotType(db, it.typeId) === "cargo");
+        for (const mod of modules) {
+          const charge = charges[0];
+          lines.push(charge ? `${mod.typeName}, ${charge.typeName}` : mod.typeName);
+          if (charge) charges.shift();
+        }
+        for (const charge of charges) lines.push(`${charge.typeName} x${charge.qty}`);
+      }
+      for (const it of all.filter((x) => x.flagName === "DroneBay")) lines.push(`${it.typeName} x${it.qty}`);
+      for (const it of all.filter((x) => x.flagName === "Cargo")) lines.push(`${it.typeName} x${it.qty}`);
+      const other = all.filter((x) => !slotRe.test(x.flagName) && !["DroneBay", "Cargo"].includes(x.flagName));
+      for (const it of other) lines.push(`// ${it.typeName} x${it.qty} (${flagLabel(it.flagName)})`);
+
+      return jsonResult({
+        killmailId: killmail_id,
+        ship: shipName,
+        fitName: name,
+        eft: lines.join("\n"),
+        itemCount: all.length,
+        notes,
       });
     }
   );

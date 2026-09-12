@@ -3,15 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGetAll, esiPost, esiDelete, getActiveCharacter } from "../auth/esi-client.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
-
-const SLOT_EFFECT_IDS: Record<number, string> = {
-  12: "hi",
-  13: "med",
-  11: "lo",
-  2663: "rig",
-  3772: "sub",
-  6306: "service",
-};
+import { parseEftFormat, type FittingItem } from "../fitting/eft.js";
+import { resolveBudgetInputs, fetchBudgetSkillLevels, BUDGET_SKILLS } from "../fitting/resolve.js";
+import { computeFittingBudget } from "../fitting/budget.js";
 
 interface EsiFitting {
   fitting_id: number;
@@ -23,162 +17,6 @@ interface EsiFitting {
     flag: string;
     quantity: number;
   }>;
-}
-
-interface FittingItem {
-  type_id: number;
-  flag: string;
-  quantity: number;
-}
-
-function resolveTypeId(db: ReturnType<typeof getDatabase>, name: string): number | null {
-  const trimmed = name.trim();
-  let row = db
-    .prepare("SELECT typeID FROM invTypes WHERE typeName = ? AND published = 1")
-    .get(trimmed) as { typeID: number } | undefined;
-  if (row) return row.typeID;
-  row = db
-    .prepare("SELECT typeID FROM invTypes WHERE typeName = ? COLLATE NOCASE AND published = 1")
-    .get(trimmed) as { typeID: number } | undefined;
-  if (row) return row.typeID;
-  return null;
-}
-
-function getSlotType(db: ReturnType<typeof getDatabase>, typeId: number): string | null {
-  const effects = db
-    .prepare("SELECT effectID FROM dgmTypeEffects WHERE typeID = ?")
-    .all(typeId) as { effectID: number }[];
-
-  for (const e of effects) {
-    if (SLOT_EFFECT_IDS[e.effectID]) return SLOT_EFFECT_IDS[e.effectID];
-  }
-
-  const cat = db
-    .prepare(
-      `SELECT c.categoryName FROM invTypes t
-       JOIN invGroups g ON t.groupID = g.groupID
-       JOIN invCategories c ON g.categoryID = c.categoryID
-       WHERE t.typeID = ?`
-    )
-    .get(typeId) as { categoryName: string } | undefined;
-
-  if (cat) {
-    if (cat.categoryName === "Drone") return "drone";
-    if (cat.categoryName === "Fighter") return "fighter";
-    if (cat.categoryName === "Charge") return "cargo";
-  }
-
-  return null;
-}
-
-interface ParsedEft {
-  shipName: string;
-  shipTypeId: number;
-  fitName: string;
-  items: FittingItem[];
-  errors: string[];
-}
-
-export function parseEftFormat(db: ReturnType<typeof getDatabase>, eft: string): ParsedEft {
-  const lines = eft.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
-  const errors: string[] = [];
-  const items: FittingItem[] = [];
-
-  const headerMatch = lines[0]?.match(/^\[(.+?),\s*(.+)\]$/);
-  if (!headerMatch) {
-    return { shipName: "", shipTypeId: 0, fitName: "", items: [], errors: ["Invalid EFT header. Expected: [Ship Name, Fit Name]"] };
-  }
-
-  const shipName = headerMatch[1].trim();
-  const fitName = headerMatch[2].trim();
-  const shipTypeId = resolveTypeId(db, shipName);
-  if (!shipTypeId) {
-    return { shipName, shipTypeId: 0, fitName, items: [], errors: [`Ship "${shipName}" not found in SDE`] };
-  }
-
-  const slotCounters: Record<string, number> = { hi: 0, med: 0, lo: 0, rig: 0, sub: 0, service: 0 };
-  const FLAG_PREFIX: Record<string, string> = {
-    hi: "HiSlot",
-    med: "MedSlot",
-    lo: "LoSlot",
-    rig: "RigSlot",
-    sub: "SubSystemSlot",
-    service: "ServiceSlot",
-  };
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line === "" || line === "---") {
-      continue;
-    }
-
-    if (line.startsWith("[Empty")) continue;
-
-    // EFT format: "Module Name, Loaded Charge" or "Item Name x2" or just "Item Name"
-    const commaIdx = line.indexOf(",");
-    let modulePart = line;
-    let chargePart: string | null = null;
-
-    if (commaIdx !== -1) {
-      const beforeComma = line.substring(0, commaIdx).trim();
-      const afterComma = line.substring(commaIdx + 1).trim();
-      // Only treat as module+charge if both parts resolve to valid types
-      // (avoids splitting item names that contain commas, though rare in EVE)
-      const beforeId = resolveTypeId(db, beforeComma);
-      if (beforeId && afterComma.length > 0) {
-        modulePart = beforeComma;
-        chargePart = afterComma;
-      }
-    }
-
-    // Parse "Item Name x2" quantity suffix
-    const quantityMatch = modulePart.match(/^(.+?)\s+x(\d+)$/);
-    const itemName = quantityMatch ? quantityMatch[1].trim() : modulePart;
-    const quantity = quantityMatch ? parseInt(quantityMatch[2], 10) : 1;
-
-    const typeId = resolveTypeId(db, itemName);
-    if (!typeId) {
-      errors.push(`Item "${itemName}" not found in SDE`);
-      continue;
-    }
-
-    const slotType = getSlotType(db, typeId);
-
-    if (!slotType) {
-      errors.push(`Could not determine slot type for "${itemName}"`);
-      continue;
-    }
-
-    if (slotType === "drone") {
-      items.push({ type_id: typeId, flag: "DroneBay", quantity });
-    } else if (slotType === "fighter") {
-      items.push({ type_id: typeId, flag: "FighterBay", quantity });
-    } else if (slotType === "cargo") {
-      items.push({ type_id: typeId, flag: "Cargo", quantity });
-    } else {
-      const prefix = FLAG_PREFIX[slotType];
-      const idx = slotCounters[slotType]!;
-      items.push({ type_id: typeId, flag: `${prefix}${idx}`, quantity });
-      slotCounters[slotType]!++;
-    }
-
-    // Handle loaded charge as a cargo item
-    if (chargePart) {
-      const chargeQuantityMatch = chargePart.match(/^(.+?)\s+x(\d+)$/);
-      const chargeName = chargeQuantityMatch ? chargeQuantityMatch[1].trim() : chargePart;
-      const chargeQty = chargeQuantityMatch ? parseInt(chargeQuantityMatch[2], 10) : 1;
-
-      const chargeTypeId = resolveTypeId(db, chargeName);
-      if (chargeTypeId) {
-        items.push({ type_id: chargeTypeId, flag: "Cargo", quantity: chargeQty });
-      } else {
-        errors.push(`Charge "${chargeName}" not found in SDE`);
-      }
-    }
-  }
-
-  return { shipName, shipTypeId, fitName, items, errors };
 }
 
 export function registerFittingTools(server: McpServer): void {
@@ -270,8 +108,8 @@ export function registerFittingTools(server: McpServer): void {
         fitShipTypeId = parsed.shipTypeId;
         fitItems = parsed.items;
 
-        if (parsed.errors.length > 0) {
-          process.stderr.write(`Warnings (some items skipped):\n${parsed.errors.join("\n")}\n\n`);
+        if (parsed.warnings.length > 0) {
+          process.stderr.write(`Warnings (some items skipped):\n${parsed.warnings.join("\n")}\n\n`);
         }
       } else {
         if (!name || !ship_type_id || !items || items.length === 0) {
@@ -286,7 +124,14 @@ export function registerFittingTools(server: McpServer): void {
         }
         fitName = name;
         fitShipTypeId = ship_type_id;
-        fitItems = items;
+        // Structured input lacks name/offline metadata — fill neutral values
+        fitItems = items.map((it) => ({
+          type_id: it.type_id,
+          name: enrichTypeName(db, it.type_id),
+          flag: it.flag,
+          quantity: it.quantity,
+          offline: false,
+        }));
       }
 
       const char = await getActiveCharacter(character_id);
@@ -373,6 +218,71 @@ export function registerFittingTools(server: McpServer): void {
         items: itemDetails,
         errors: parsed.errors.length > 0 ? parsed.errors : undefined,
         valid: parsed.errors.length === 0 && parsed.items.length > 0,
+      });
+    }
+  );
+
+  server.tool(
+    "check_fitting",
+    "Check whether an EFT-format fit actually fits: exact CPU/powergrid/calibration budgets, slot counts, turret/launcher hardpoints, and drone bay/bandwidth, with the well-defined skill effects applied (CPU Management +5% output/lvl, Power Grid Management +5% output/lvl, Weapon Upgrades -5% turret+launcher CPU/lvl, Advanced Weapon Upgrades -2% turret+launcher PG/lvl, weapon-rig PG drawbacks). Skills default to the character's trained ESI levels; pass `skills` overrides for what-if (e.g. {'Weapon Upgrades': 4}). Deliberately NOT a full dogma engine — implants/boosters/overheat/command bursts, Electronics Upgrades reductions, T3 subsystem output, stacking penalties, capacitor, and DPS/EHP are unmodeled (pyfa's eos is the reference for those) — everything unmodeled is listed in the report. Use this instead of hand-math before recommending or saving a fit; the in-game fitting window remains ground truth.",
+    {
+      eft: z.string().describe("EFT format fitting string"),
+      character_id: z.number().optional().describe("Character ID for skill levels (uses active character if omitted)"),
+      skills: z
+        .record(z.string(), z.number())
+        .optional()
+        .describe("Skill level overrides by name for what-if checks, e.g. {'Weapon Upgrades': 4, 'CPU Management': 5}"),
+    },
+    async ({ eft, character_id, skills }) => {
+      const db = getDatabase();
+      const parsed = parseEftFormat(db, eft);
+      if (parsed.errors.length > 0) {
+        return jsonResult({ valid: false, errors: parsed.errors });
+      }
+
+      let levels;
+      let skillSource;
+      try {
+        const fetched = await fetchBudgetSkillLevels(db, character_id);
+        levels = fetched.levels;
+        skillSource = fetched.source;
+      } catch (err) {
+        levels = { cpuManagement: 0, powerGridManagement: 0, weaponUpgrades: 0, advancedWeaponUpgrades: 0 };
+        skillSource = `character skills unavailable (${err instanceof Error ? err.message : String(err)}) — all levels 0; pass the skills param for a what-if`;
+      }
+      if (skills) {
+        const nameToKey = new Map<string, string>(Object.entries(BUDGET_SKILLS).map(([k, v]) => [v, k]));
+        for (const [name, lvl] of Object.entries(skills)) {
+          const key = nameToKey.get(name);
+          if (key) {
+            levels = { ...levels, [key]: lvl } as typeof levels;
+          } else {
+            parsed.warnings.push(`Unknown skill override "${name}" ignored (known: ${Object.values(BUDGET_SKILLS).join(", ")})`);
+          }
+        }
+        skillSource += ` + overrides: ${Object.entries(skills).map(([n, l]) => `${n} ${l}`).join(", ")}`;
+      }
+
+      const resolved = resolveBudgetInputs(db, parsed);
+      const report = computeFittingBudget(resolved.hull, resolved.items, resolved.drones, levels);
+
+      return jsonResult({
+        ship: resolved.hull.name,
+        fitName: parsed.fitName,
+        skillSource,
+        appliedSkills: report.appliedSkills,
+        fits: report.fits,
+        violations: report.violations.length > 0 ? report.violations : undefined,
+        cpu: report.cpu,
+        power: report.power,
+        calibration: report.calibration,
+        slots: report.slots,
+        hardpoints: report.hardpoints,
+        drones: report.drones,
+        offline: report.offline.length > 0 ? report.offline : undefined,
+        unmodeled: report.unmodeled,
+        warnings: parsed.warnings.length > 0 ? parsed.warnings : undefined,
+        notes: resolved.notes.length > 0 ? resolved.notes : undefined,
       });
     }
   );

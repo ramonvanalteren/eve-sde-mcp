@@ -19,7 +19,10 @@ new weapon system is fitted for the first time rather than improvising from memo
 ## Contents
 - CRITICAL RULE: Never Fit From Memory
 - The Four Fitting Constraints (CPU, powergrid, calibration, slots)
-- The CPU/PG Calculation Error
+- The Soft Fifth Constraint: Capacitor
+- Stacking Penalties — Why "More Damage Mods" Stops Working
+- Overheat — the Free 15%
+- The CPU/PG Calculation Error — solved by check_fitting
 - Hull Bonuses Drive Fit Design
 - Tank Philosophy by Role
 - Module Naming Conventions
@@ -27,6 +30,7 @@ new weapon system is fitted for the first time rather than improvising from memo
 - Drone Verification
 - Fit Coherence Check
 - Workflow: Building a Fit
+- Workflow: Reviewing a Killmail Fit
 - Using MCP/SDE Tools
 - Common Fitting Mistakes
 
@@ -89,7 +93,78 @@ produces a fit that cannot be activated in-game.
 - Verify turret AND launcher hardpoints separately from high slot count
 
 
-## The CPU/PG Calculation Error
+## The Soft Fifth Constraint: Capacitor
+
+CPU/PG/calibration/slots decide whether a fit can be INSTALLED. Capacitor
+decides whether it keeps RUNNING — a soft constraint the fitting window
+never enforces, and `check_fitting` deliberately does not simulate (it
+lists capacitor as unmodeled).
+
+- Cap-stable = regen ≥ drain with tackle + prop + reppers running. Active
+  armor/shield tanks and prop mods are the big drains; MWDs are enormous.
+- A brawler with an active rep usually needs cap mods (battery, recharger)
+  or a cap booster — or accepts being on a timer.
+- Kiters usually don't care: buffer-tanked + pulsed AB fits are often
+  stable by accident.
+- Neuts flip the math: against a neut-fitted opponent even a "stable" fit
+  drains in seconds. Brawlers should plan headroom for being neuted
+  (booster charges in cargo).
+- Rule of thumb without pyfa: sum the cap usage of everything running
+  continuously, compare against peak recharge (~2.5× base regen at ~25%
+  capacitor), and treat anything in the grey zone as a timer, not
+  stability. For cap graphs, pyfa.
+
+## Stacking Penalties — Why "More Damage Mods" Stops Working
+
+Modules affecting the SAME attribute are stacking-penalized: the 2nd is ~87%
+effective, the 3rd ~57%, the 4th ~28% — beyond the third, a module is
+near-useless for its penalized bonus. This is fit-DESIGN math, not budget
+math (`check_fitting` doesn't compute it — it doesn't change whether a fit
+installs, only whether it's worth the slot).
+
+- Damage mods (Mag Stab / BCS / DDAs): 3 is the practical ceiling; the 4th
+  low is almost always better as tank/utility.
+- Damage Controls are NOT stacking-penalized with resist modules (different
+  mechanism) — always worth fitting alongside plates/hardeners.
+- Plates/extenders/hardeners: same rule — don't stack 4+ of one kind.
+- A rig's bonus stacks against same-bonus modules (resist rig + resist mod).
+
+## Overheat — the Free 15%
+
+Every T2/meta module can overheat: more damage/range/rep at the cost of
+heat damage to the rack. In PvP frigate/destroyer fights, overheating is
+ASSUMED — plan around it, don't discover it.
+
+- A fit usually overheats ONE thing for the critical window: guns (DPS),
+  the point (range), or the tank (rep amount).
+- Carry nanite repair paste; it's the difference between one engagement
+  and a fight.
+- Overheat doesn't change fitting budgets (`check_fitting` ignores it —
+  runtime behavior, not install cost), but it changes module choices:
+  modules that can't swing a fight when overheated earn their slots less.
+
+## The CPU/PG Calculation Error — solved by check_fitting
+
+The historical single most important lesson: the SDE provides BASE module
+costs, while character skills reduce what modules actually consume (output
+skills raise the ship's supply, cost-reduction skills lower module needs) —
+raw SDE math systematically overstates usage.
+
+**Use `check_fitting` instead of hand-math before presenting any fit.** It
+applies the well-defined effects — CPU/PG Management output bonuses, Weapon
+Upgrades (-5% turret/launcher CPU per level), Advanced Weapon Upgrades
+(-2% turret/launcher PG per level), weapon-rig PG drawbacks — and returns
+exact CPU/PG/calibration/slot/hardpoint/drone budgets plus everything it
+deliberately leaves unmodeled (Electronics Upgrades reductions, T3
+subsystem output, implants, boosters, overheat, capacitor — pyfa's eos is
+the reference for that tier).
+
+The fallback rules when no tools are available still apply:
+- Never declare "doesn't fit" from raw math — if it's close (within ~15%),
+  it likely fits once module cost-reduction skills are applied
+- The in-game fitting window is ground truth
+- When the user reports fitting-window numbers, trust those over any
+  calculation
 
 **This is the single most important lesson in this skill.**
 
@@ -179,6 +254,12 @@ Always verify exact names via SDE search before including in a fit.
   save significant CPU/PG for small stat losses.
 - **Faction/Navy:** Best stats AND reasonable fitting costs, but expensive ISK.
   Good for ammo (Caldari Navy Antimatter) but expensive for modules while learning.
+- **Deadspace/Officer:** Best-in-slot stats, extreme prices. Rarely worth it
+  on throwaway hulls; legitimate on escalation/hero ships.
+- **Abyssal (mutated):** Stats roll within a range per mutaplasmid — and
+  they are NOT in the SDE by display name. `parse_eft`/`check_fitting` skip
+  them with a warning, so budgets under-count an abyssal module. Verify
+  abyssal fits in the in-game window.
 
 **The practical rule:** Start with all-T2, check if it fits. If CPU/PG is over,
 swap the highest-CPU module to its compact variant first. Common high-CPU culprits
@@ -266,13 +347,11 @@ Before presenting any fit, verify internal coherence:
    - Tank (armor for brawl, shield/none for kite)
    - Damage mods in remaining lows
    - Rigs last (check calibration budget)
-5. **Verify fitting math:**
-   - Total CPU (raw SDE costs) vs ship CPU × skill bonus
-   - Total PG (raw SDE costs) vs ship PG × skill bonus
-   - Total calibration vs calibration capacity
-   - Note: actual margin will be BETTER than this calculation due to module
-     cost reduction skills not factored in
-   - Flag the fitting window as ground truth
+5. **Verify fitting math — run `check_fitting`** (it applies skill levels
+   and rig drawbacks; its report lists what's unmodeled). Fallback without
+   tools: raw SDE costs vs ship output × skill bonus, noting the margin is
+   pessimistic because cost-reduction skills aren't factored; the fitting
+   window stays ground truth.
 6. **If over budget:**
    - Swap highest-CPU/PG module to compact/meta variant
    - Consider a fitting rig (Processor Overclocking Unit for CPU,
@@ -283,9 +362,23 @@ Before presenting any fit, verify internal coherence:
 8. **Present fit with honest caveats** about what's verified vs estimated
 
 
+## Workflow: Reviewing a Killmail Fit
+
+1. `get_killmail` (id + hash from `get_recent_killmails` or zkillboard)
+2. `killmail_to_eft` — reconstructs the victim's full fit (destroyed +
+   dropped) as EFT, charges re-attached to their guns via slot flags
+3. `check_fitting` on that EFT — note the victim's skills are unknown;
+   pass `skills` overrides (yours, or all-V for an upper bound) and say
+   which assumption you used
+4. Coherence check as for any fit — but the framing is doctrine: what was
+   this fit trying to do, did the killer's class counter it, and what ONE
+   change most improves it?
+5. If recommending a replacement: verify it with `check_fitting` (and
+   `price_fitting` for the ISK check) before presenting.
+
 ## Using MCP/SDE Tools
 
-When EVE SDE MCP tools are available, use them for EVERY hull and module lookup — the tools' own descriptions cover each interface; what matters here is the query recipes and the order of operations.
+When EVE SDE MCP tools are available, use them for EVERY hull and module lookup — the tools' own descriptions cover each interface; what matters here is the query recipes and the order of operations. Fitting-loop tools: `check_fitting` (exact budget), `killmail_to_eft` (loss review), `price_fitting` (acquisition cost), `parse_eft` (preview), `save_fitting`/`delete_fitting`/`get_fittings` (in-game list).
 
 **SDE attribute query recipes (the non-obvious filters):**
 - Slot counts: filter "slot" on hull type
@@ -304,7 +397,9 @@ When EVE SDE MCP tools are available, use them for EVERY hull and module lookup 
 5. `get_type_attributes` with "calibration" filter for rig budget
 6. `search_types` for each module, then `compare_types` for fitting costs
 7. `check_skill_requirements` against the active character
-8. `parse_eft` to validate before `save_fitting`
+8. `check_fitting` for the exact budget (before presenting — not after)
+9. `parse_eft` to validate before `save_fitting`; `price_fitting` when the
+   ISK cost of the fit matters
 
 ## Common Fitting Mistakes (All Encountered in Practice)
 
@@ -316,7 +411,7 @@ When EVE SDE MCP tools are available, use them for EVERY hull and module lookup 
 6. **Web on a 20km kiter** → module can't reach at engagement range
 7. **Neut on a kiter** → 6km range, kiting at 20km, never fires
 8. **Wrong ammo for engagement range** → Void at 10km = zero damage
-9. **Declaring "doesn't fit" from raw SDE math** → ignoring module cost reduction skills
+9. **Declaring "doesn't fit" from raw SDE math** → ignoring module cost reduction skills — run check_fitting; it exists for exactly this
 10. **Using module names from memory** → "75mm Railgun" doesn't exist
 11. **Fitting projectile weapons on a hybrid-bonused hull** → wasting hull bonus
 12. **Not checking turret hardpoints vs high slots** → trying to fit 4 guns in 3 hardpoints
