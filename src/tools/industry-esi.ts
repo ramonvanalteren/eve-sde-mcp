@@ -88,6 +88,52 @@ async function fetchQuotesForTypes(
 
 export function registerIndustryEsiTools(server: McpServer): void {
   server.tool(
+    "get_character_blueprints",
+    "List the character's blueprints with Material Efficiency, Time Efficiency, and runs (BPO vs BPC), from ESI /characters/{id}/blueprints/. Requires esi-characters.read_blueprints.v1 — granted on the next esi_login after the scope was added to the server's default set; until then this reports the missing scope. The BOM ledger pass resolves each delivered manufacturing job's exact BPO ME from this data (config blueprintME is the fallback, ME 0 the floor).",
+    {
+      character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
+    },
+    async ({ character_id }) => {
+      const char = await getActiveCharacter(character_id);
+      const db = getDatabase();
+      try {
+        const bps = await esiGetAll<{ item_id: number; type_id: number; location_id?: number; location_flag?: string; quantity?: number; material_efficiency?: number; time_efficiency?: number; runs?: number }>(
+          `/characters/${char.characterId}/blueprints/`,
+          { characterId: char.characterId }
+        );
+        const enriched = bps
+          .map((b) => ({
+            itemId: b.item_id,
+            blueprintName: enrichTypeName(db, b.type_id),
+            blueprintTypeId: b.type_id,
+            kind: b.runs === -1 ? "original" : `copy (${b.runs} runs)`,
+            me: b.material_efficiency ?? 0,
+            te: b.time_efficiency ?? 0,
+            locationId: b.location_id ?? null,
+            locationFlag: b.location_flag ?? null,
+            quantity: b.quantity ?? null,
+          }))
+          .sort((a, b) => a.blueprintName.localeCompare(b.blueprintName));
+        return jsonResult({
+          characterName: char.characterName,
+          blueprintCount: enriched.length,
+          blueprints: enriched,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Blueprints unavailable: ${msg}. The endpoint needs esi-characters.read_blueprints.v1 — run esi_login to re-authenticate with the new scope, then this and the BOM auto-ME resolution work.`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.tool(
     "scan_builds",
     "Discover industry candidates: screen every T1 manufacturing blueprint in a category (or a specific product list — e.g. items you already trade) with ESI bulk adjusted prices, rank by rough margin, then LIVE-verify the top candidates at a station (materials + product order books, net of tax/broker, 30-day average traded volume). Screen hits are candidates, never verdicts — every reported margin past the screen is live-verified, and finalists still need price_build with the installation cost plus skill checks before runs are committed. The closed SDE blueprint universe makes industry discovery self-sufficient — no external tier feeds needed.",
     {

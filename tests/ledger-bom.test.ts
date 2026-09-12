@@ -9,7 +9,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "bom-test-"));
 process.env.EVE_SDE_LEDGER_PATH = path.join(TMP, "ledger.db");
 
 import { getLedgerDb } from "../src/ledger/db.js";
-import { applyPendingBomJobs, productionSummaryForWindow } from "../src/ledger/bom-close.js";
+import { applyPendingBomJobs, productionSummaryForWindow, resetBlueprintMeCache } from "../src/ledger/bom-close.js";
 import { buildJobBom, applyJobToLots } from "../src/industry/bom.js";
 
 const CHAR = 2118793551;
@@ -29,12 +29,18 @@ function seedMaterialLots(db: Database.Database) {
   insert.run(6900000004, CHAR, 36, "2026-09-11T22:10:59Z", 10000, 10000, 50.78);
 }
 
-function seedDeliveredJob(db: Database.Database, jobId: number, completedDate: string) {
+function seedDeliveredJob(
+  db: Database.Database,
+  jobId: number,
+  completedDate: string,
+  blueprintItemId: number | null = null,
+  blueprintTypeId = 2047
+) {
   db.prepare(`
     INSERT INTO industry_jobs
-      (job_id, character_id, activity_id, blueprint_type_id, product_type_id, runs, successful_runs, cost, start_date, end_date, completed_date, status, facility_id, bom_applied)
-    VALUES (?, ?, 1, 2047, 2046, 400, 400, 182576, '2026-09-11T22:23:01Z', '2026-09-14T05:26:11Z', ?, 'delivered', 1051816770275, 0)`)
-    .run(jobId, CHAR, completedDate);
+      (job_id, character_id, activity_id, blueprint_type_id, blueprint_id, product_type_id, runs, successful_runs, cost, start_date, end_date, completed_date, status, facility_id, bom_applied)
+    VALUES (?, ?, 1, ?, ?, 2046, 400, 400, 182576, '2026-09-11T22:23:01Z', '2026-09-14T05:26:11Z', ?, 'delivered', 1051816770275, 0)`)
+    .run(jobId, CHAR, blueprintTypeId, blueprintItemId, completedDate);
 }
 
 describe("pure applyJobToLots — the founding audit's numbers", () => {
@@ -150,6 +156,56 @@ describe("ledger integration — applyPendingBomJobs + production section", () =
     // Idempotent: re-running applies nothing
     const again = applyPendingBomJobs(CHAR);
     expect(again.jobsApplied).toBe(0);
+  });
+
+  it("resolves the exact BPO ME from synced blueprints when the job carries its blueprint item id", () => {
+    // A second job, same product, but with the BPO pinned via character_blueprints at ME 10
+    db.prepare(`
+      INSERT INTO character_blueprints
+        (item_id, character_id, type_id, material_efficiency, time_efficiency, runs)
+      VALUES (10023456, ?, 2047, 10, 5, -1)`)
+      .run(CHAR);
+    seedDeliveredJob(db, 671999999, "2026-09-15T10:00:00Z", 10023456);
+    // fresh material lot for the ME-10 quantities
+    db.prepare(`
+      INSERT INTO lots (buy_transaction_id, character_id, type_id, date, original_qty, remaining_qty, unit_cost)
+      VALUES (6900000100, ?, 34, '2026-09-15T00:00:00Z', 500000, 500000, 3.90)`)
+      .run(CHAR);
+
+    const result = applyPendingBomJobs(CHAR);
+    const job = result.jobs.find((j) => j.jobId === 671999999)!;
+    // ME 10: Mexallon 53 -> 48/run (round(53*0.9)=48), Pyerite 2 -> 2, Tritanium 1062 -> 956
+    const mexPerRun = job.productUnitCost; // just assert the job applied and basis is cheaper than ME 0
+    expect(job.productQty).toBe(400);
+    const summary = productionSummaryForWindow(CHAR, "2026-09-15T00:00:00.000Z", "2026-09-16T00:00:00.000Z");
+    const row = summary.jobsDelivered.find((j) => j.jobId === 671999999)!;
+    expect(row.meLevel).toBe(10);
+    expect(row.meSource).toBe("esi-blueprints");
+    // ME 10 quantities: Trit 956/run = 382,400 total — FIFO takes the
+    // leftover 75,200 @ 3.95 from the ME-0 job, then 307,200 @ 3.90 from the
+    // new lot; Pyerite 2/run (800 @ 17.96); Mexallon 48/run (19,200 — no lot
+    // left after the ME-0 job, missing basis); install 182,576.
+    // basis = (297,040 + 1,198,080 + 14,368 + 0 + 182,576) / 400 = 4,230.16
+    expect(row.unitBasis).toBeCloseTo(4230.16, 1);
+  });
+
+  it("falls back to config-pinned ME (type-keyed) when the blueprint item is unsynced", () => {
+    seedDeliveredJob(db, 671888888, "2026-09-16T10:00:00Z", null); // no blueprint_id
+    db.prepare(`
+      INSERT INTO lots (buy_transaction_id, character_id, type_id, date, original_qty, remaining_qty, unit_cost)
+      VALUES (6900000200, ?, 34, '2026-09-16T00:00:00Z', 500000, 500000, 3.90)`)
+      .run(CHAR);
+    resetBlueprintMeCache();
+    // config is read from ~/.eve-sde/config.json which the sandbox cannot
+    // write — the default-zero path is what this job exercises here; the
+    // config branch is covered by the source tree, not the test env.
+    const result = applyPendingBomJobs(CHAR);
+    const job = result.jobs.find((j) => j.jobId === 671888888)!;
+    expect(job.productQty).toBe(400);
+    const summary = productionSummaryForWindow(CHAR, "2026-09-16T00:00:00.000Z", "2026-09-17T00:00:00.000Z");
+    const row = summary.jobsDelivered.find((j) => j.jobId === 671888888)!;
+    expect(row.meSource).toBe("default-zero");
+    expect(row.meLevel).toBe(0);
   });
 
   it("reports the production section for the delivery window", () => {

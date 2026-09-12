@@ -193,6 +193,25 @@ export function getLedgerDb(): Database.Database {
       bom_applied INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_bom_pending ON industry_jobs(character_id, activity_id, bom_applied);
+
+    -- Synced character blueprints (ESI /characters/{id}/blueprints/ —
+    -- requires esi-characters.read_blueprints.v1, granted on the next
+    -- login after the scope was added to the default set). The BOM pass
+    -- resolves each delivered job's exact BPO ME from here via the job's
+    -- blueprint item id — config blueprintME (type-keyed) is the fallback.
+    CREATE TABLE IF NOT EXISTS character_blueprints (
+      item_id INTEGER PRIMARY KEY,
+      character_id INTEGER NOT NULL,
+      type_id INTEGER NOT NULL,
+      location_id INTEGER,
+      location_flag TEXT,
+      quantity INTEGER,
+      material_efficiency INTEGER NOT NULL DEFAULT 0,
+      time_efficiency INTEGER NOT NULL DEFAULT 0,
+      runs INTEGER,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_blueprints_character_type ON character_blueprints(character_id, type_id);
   `);
 
   // Migrations for columns added after the table already existed on disk.
@@ -211,6 +230,9 @@ export function getLedgerDb(): Database.Database {
   // BOM material-consumption rows in lot_consumptions: inventory
   // transformation, not sales — realized-P&L queries exclude them.
   ensureColumn(ledgerDb, "lot_consumptions", "is_production", "INTEGER NOT NULL DEFAULT 0");
+  // The specific blueprint item a job ran with (ESI job blueprint_id) —
+  // joins to character_blueprints for exact per-BPO ME resolution.
+  ensureColumn(ledgerDb, "industry_jobs", "blueprint_id", "INTEGER");
 
   return ledgerDb;
 }

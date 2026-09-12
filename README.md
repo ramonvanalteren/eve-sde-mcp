@@ -109,7 +109,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 
 `get_station_fees` shows the resolution per station and lists any unconfigured stations you trade at.
 
-`blueprintME` pins blueprint Material Efficiency levels (keyed by blueprint type id) for the close's bill-of-materials linkage — ESI exposes no per-BPO ME, so the real levels are pinned here. Unlisted blueprints default to ME 0 (base quantities, conservative basis). The daily close consumes delivered manufacturing jobs' materials from FIFO buy lots oldest-first and creates product lots at all-in basis (materials + installation); product sells then match real cost basis, and the close report carries a production section.
+`blueprintME` is the FALLBACK for the close's bill-of-materials ME resolution (keyed by blueprint type id). The primary source is the character's synced ESI blueprints — each delivered job's own BPO is matched by item id for its exact ME (`get_character_blueprints`; requires `esi-characters.read_blueprints.v1`, in the default login scope set since this feature — re-auth once if your token predates it). Unlisted and unsynced blueprints default to ME 0 (base quantities, conservative basis). The daily close consumes delivered manufacturing jobs' materials from FIFO buy lots oldest-first and creates product lots at all-in basis (materials + installation); product sells then match real cost basis, and the close report carries a production section.
 
 ### Killmails (ESI)
 
@@ -137,6 +137,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `get_industry_jobs` | Active/recent manufacturing, research, invention jobs |
 | `get_industry_cost_indices` | System cost indices for industry (public) |
 | `price_build` | Price a manufacturing job before committing runs: ME-adjusted blueprint materials at live market prices + installation cost vs the product's net sell — unit build cost and margin on both acquisition bases (materials at sell orders = instant/conservative, at buy orders = patient), book depths, thin-book warnings. Born from a production audit that found a 400-run job committed at +0.9% margin |
+| `get_character_blueprints` | The character's blueprints with ME/TE/runs from ESI — also feeds the BOM pass's exact per-BPO ME resolution |
 | `scan_builds` | Discover industry candidates: screen every market-obtainable T1 manufacturing BPO in a category (or a specific product list — synergy mode) with ESI bulk adjusted prices, then LIVE-verify the top candidates at a station (order-book margins on both bases, 30-day traded volume, book depths, input cost-share). Screen ranks, verification decides — the closed SDE blueprint universe makes industry discovery self-sufficient, no external tier feeds needed |
 | `get_character_assets` | Items in hangars/containers with names |
 | `get_character_contracts` | Courier, item exchange, auction contracts |

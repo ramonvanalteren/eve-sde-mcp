@@ -17,13 +17,47 @@
 // journal cashflow; the industry skill's research-payback framing handles
 // the judgment.
 
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import path from "path";
 import { homedir } from "os";
 import { getDatabase } from "../database.js";
 import { getLedgerDb } from "./db.js";
 import { buildJobBom, applyJobToLots, type AppliedJob, type BomMaterial } from "../industry/bom.js";
+
+export interface MeResolution {
+  meLevel: number;
+  source: "esi-blueprints" | "config" | "default-zero";
+}
+
+/**
+ * Resolve the ME a job ran with, best source first:
+ *   1. esi-blueprints — the exact BPO (job's blueprint item id) from the
+ *      synced character_blueprints table. Caveat: that's the CURRENT ME of
+ *      the BPO; a job installed before mid-stream research completed is
+ *      slightly overstated in efficiency.
+ *   2. config blueprintME (type-keyed) — the pinned level.
+ *   3. 0 (base quantities, conservative basis).
+ */
+function resolveJobMe(
+  db: Database.Database,
+  blueprintItemId: number | null,
+  blueprintTypeId: number
+): MeResolution {
+  if (blueprintItemId != null) {
+    const bp = db
+      .prepare(`SELECT material_efficiency FROM character_blueprints WHERE item_id = ?`)
+      .get(blueprintItemId) as { material_efficiency: number } | undefined;
+    if (bp) {
+      return { meLevel: Math.max(0, Math.min(10, Math.round(bp.material_efficiency))), source: "esi-blueprints" };
+    }
+  }
+  const configMe = loadBlueprintMeSettings().get(blueprintTypeId);
+  if (configMe !== undefined) {
+    return { meLevel: configMe, source: "config" };
+  }
+  return { meLevel: 0, source: "default-zero" };
+}
 
 let cachedBlueprintMe: Map<number, number> | null = null;
 
@@ -103,11 +137,10 @@ export interface BomApplyResult {
  */
 export function applyPendingBomJobs(characterId: number): BomApplyResult {
   const db = getLedgerDb();
-  const meSettings = loadBlueprintMeSettings();
 
   const jobRows = db
     .prepare(
-      `SELECT job_id, blueprint_type_id, product_type_id, runs, successful_runs, cost, completed_date
+      `SELECT job_id, blueprint_type_id, blueprint_id, product_type_id, runs, successful_runs, cost, completed_date
        FROM industry_jobs
        WHERE character_id = ? AND activity_id = 1 AND bom_applied = 0
          AND status = 'delivered' AND completed_date IS NOT NULL
@@ -116,6 +149,7 @@ export function applyPendingBomJobs(characterId: number): BomApplyResult {
     .all(characterId) as Array<{
     job_id: number;
     blueprint_type_id: number;
+    blueprint_id: number | null;
     product_type_id: number | null;
     runs: number;
     successful_runs: number | null;
@@ -134,8 +168,8 @@ export function applyPendingBomJobs(characterId: number): BomApplyResult {
     }
 
     const effectiveRuns = job.successful_runs ?? job.runs;
-    const meLevel = meSettings.get(job.blueprint_type_id) ?? 0;
-    const bom = buildJobBom(bp.materials, bp.productQtyPerRun, meLevel);
+    const me = resolveJobMe(db, (job as { blueprint_id?: number | null }).blueprint_id ?? null, job.blueprint_type_id);
+    const bom = buildJobBom(bp.materials, bp.productQtyPerRun, me.meLevel);
 
     // Load the character's open lots for this job's material types, oldest-first
     const materialTypeIds = [...new Set(bom.materials.map((m) => m.typeId))];
@@ -234,6 +268,8 @@ export interface ProductionDaySummary {
     materialsCostMatched: number;
     installationCost: number;
     unitBasis: number;
+    meLevel: number;
+    meSource: MeResolution["source"];
     missingBasis: Array<{ typeId: number; quantity: number }>;
   }>;
   totalUnitsProduced: number;
@@ -264,7 +300,7 @@ export function productionSummaryForWindow(characterId: number, start: string, e
 
   const jobRows = db
     .prepare(
-      `SELECT job_id, product_type_id, runs, successful_runs, cost, completed_date
+      `SELECT job_id, blueprint_type_id, blueprint_id, product_type_id, runs, successful_runs, cost, completed_date
        FROM industry_jobs
        WHERE character_id = ? AND activity_id = 1 AND bom_applied = 1
          AND status = 'delivered' AND completed_date >= ? AND completed_date < ?
@@ -272,6 +308,8 @@ export function productionSummaryForWindow(characterId: number, start: string, e
     )
     .all(characterId, start, end) as Array<{
     job_id: number;
+    blueprint_type_id: number;
+    blueprint_id: number | null;
     product_type_id: number;
     runs: number;
     successful_runs: number | null;
@@ -306,6 +344,7 @@ export function productionSummaryForWindow(characterId: number, start: string, e
 
     const units = productLot.original_qty;
     const basis = units * productLot.unit_cost;
+    const me = resolveJobMe(db, job.blueprint_id, job.blueprint_type_id);
     summary.jobsDelivered.push({
       jobId: job.job_id,
       productName: productNameRow?.typeName ?? `type ${job.product_type_id}`,
@@ -314,6 +353,8 @@ export function productionSummaryForWindow(characterId: number, start: string, e
       materialsCostMatched: materialsCost.cost ?? 0,
       installationCost: job.cost ?? 0,
       unitBasis: productLot.unit_cost,
+      meLevel: me.meLevel,
+      meSource: me.source,
       missingBasis: missingRows.map((m) => ({ typeId: m.type_id, quantity: m.qty })),
     });
     summary.totalUnitsProduced += units;
