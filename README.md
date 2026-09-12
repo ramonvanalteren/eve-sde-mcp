@@ -118,7 +118,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `save_fitting` | Save a fitting from EFT format or structured input (write) |
 | `delete_fitting` | Delete a saved fitting by ID (write) |
 | `parse_eft` | Preview EFT parsing without saving — resolves names to IDs and slot flags; tolerates empty-slot markers, offline markers, x-quantities, mutated-module warnings |
-| `check_fitting` | Exact fit check: CPU/PG/calibration/slot/hardpoint/drone-bay budgets from the SDE with skill effects applied (CPU/PG Management, Weapon/AWU, weapon-rig drawbacks); unmodeled effects listed (pyfa territory) |
+| `check_fitting` | Exact fit check: CPU/PG/calibration/slot/hardpoint/drone-bay budgets from the SDE with skill effects applied (CPU/PG Management, Weapon/AWU, Evasive Maneuvering, weapon-rig drawbacks), plus a mass/inertia/align section (ln(4) in-game warp-entry formula, stack-penalized agility modifiers, online prop mass additions — the MWD passive-mass trap; sim-validated within ~2%); unmodeled effects listed (pyfa territory) |
 | `killmail_to_eft` | Reconstruct a killmail victim's fit (destroyed + dropped) as EFT — feeds check_fitting / price_fitting / save_fitting |
 | `price_fitting` | Sum the cheapest sell orders per fit item at a station (default Jita 4-4) — the real acquisition cost of a fit |
 

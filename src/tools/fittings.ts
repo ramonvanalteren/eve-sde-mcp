@@ -4,8 +4,9 @@ import { getDatabase } from "../database.js";
 import { esiGetAll, esiPost, esiDelete, getActiveCharacter } from "../auth/esi-client.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
 import { parseEftFormat, type FittingItem } from "../fitting/eft.js";
-import { resolveBudgetInputs, fetchBudgetSkillLevels, BUDGET_SKILLS } from "../fitting/resolve.js";
+import { resolveBudgetInputs, fetchBudgetSkillLevels, fetchHullMassKg, BUDGET_SKILLS } from "../fitting/resolve.js";
 import { computeFittingBudget } from "../fitting/budget.js";
+import { computePropulsion } from "../fitting/propulsion.js";
 
 interface EsiFitting {
   fitting_id: number;
@@ -224,7 +225,7 @@ export function registerFittingTools(server: McpServer): void {
 
   server.tool(
     "check_fitting",
-    "Check whether an EFT-format fit actually fits: exact CPU/powergrid/calibration budgets, slot counts, turret/launcher hardpoints, and drone bay/bandwidth, with the well-defined skill effects applied (CPU Management +5% output/lvl, Power Grid Management +5% output/lvl, Weapon Upgrades -5% turret+launcher CPU/lvl, Advanced Weapon Upgrades -2% turret+launcher PG/lvl, weapon-rig PG drawbacks). Skills default to the character's trained ESI levels; pass `skills` overrides for what-if (e.g. {'Weapon Upgrades': 4}). Deliberately NOT a full dogma engine — implants/boosters/overheat/command bursts, Electronics Upgrades reductions, T3 subsystem output, stacking penalties, capacitor, and DPS/EHP are unmodeled (pyfa's eos is the reference for those) — everything unmodeled is listed in the report. Use this instead of hand-math before recommending or saving a fit; the in-game fitting window remains ground truth.",
+    "Check whether an EFT-format fit actually fits: exact CPU/powergrid/calibration budgets, slot counts, turret/launcher hardpoints, drone bay/bandwidth, and a mass/inertia/align section (in-game ln(4) warp-entry formula; Evasive Maneuvering -5% inertia/level; stack-penalized agility modifiers from modules and rigs; massAddition of online prop modules — the classic MWD align penalty). Skill effects applied: CPU Management +5% output/lvl, Power Grid Management +5% output/lvl, Weapon Upgrades -5% turret+launcher CPU/lvl, Advanced Weapon Upgrades -2% turret+launcher PG/lvl, weapon-rig PG drawbacks. Skills default to the character's trained ESI levels; pass `skills` overrides for what-if (e.g. {'Weapon Upgrades': 4}). Deliberately NOT a full dogma engine — implants/boosters/overheat/command bursts, Electronics Upgrades reductions, T3 subsystem output, capacitor, DPS/EHP, velocity, and cargo are unmodeled (pyfa's eos is the reference for those) — everything unmodeled is listed in the report. Use this instead of hand-math before recommending or saving a fit; the in-game fitting window remains ground truth.",
     {
       eft: z.string().describe("EFT format fitting string"),
       character_id: z.number().optional().describe("Character ID for skill levels (uses active character if omitted)"),
@@ -247,7 +248,7 @@ export function registerFittingTools(server: McpServer): void {
         levels = fetched.levels;
         skillSource = fetched.source;
       } catch (err) {
-        levels = { cpuManagement: 0, powerGridManagement: 0, weaponUpgrades: 0, advancedWeaponUpgrades: 0 };
+        levels = { cpuManagement: 0, powerGridManagement: 0, weaponUpgrades: 0, advancedWeaponUpgrades: 0, evasiveManeuvering: 0 };
         skillSource = `character skills unavailable (${err instanceof Error ? err.message : String(err)}) — all levels 0; pass the skills param for a what-if`;
       }
       if (skills) {
@@ -266,6 +267,15 @@ export function registerFittingTools(server: McpServer): void {
       const resolved = resolveBudgetInputs(db, parsed);
       const report = computeFittingBudget(resolved.hull, resolved.items, resolved.drones, levels);
 
+      const hullMassKg = await fetchHullMassKg(db, resolved.hull.typeId);
+      const propulsion = computePropulsion({
+        hullName: resolved.hull.name,
+        hullMassKg,
+        hullInertia: resolved.hullInertia,
+        evasiveManeuveringLevel: levels.evasiveManeuvering,
+        items: resolved.propulsionItems,
+      });
+
       return jsonResult({
         ship: resolved.hull.name,
         fitName: parsed.fitName,
@@ -279,6 +289,7 @@ export function registerFittingTools(server: McpServer): void {
         slots: report.slots,
         hardpoints: report.hardpoints,
         drones: report.drones,
+        propulsion,
         offline: report.offline.length > 0 ? report.offline : undefined,
         unmodeled: report.unmodeled,
         warnings: parsed.warnings.length > 0 ? parsed.warnings : undefined,

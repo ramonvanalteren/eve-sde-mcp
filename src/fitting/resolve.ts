@@ -12,6 +12,7 @@ import type {
   HullBudgetInput,
   SkillLevels,
 } from "./budget.js";
+import type { PropulsionItemInput } from "./propulsion.js";
 
 const HULL_ATTR_NAMES = [
   "cpuOutput",
@@ -32,6 +33,7 @@ export const BUDGET_SKILLS = {
   powerGridManagement: "Power Grid Management",
   weaponUpgrades: "Weapon Upgrades",
   advancedWeaponUpgrades: "Advanced Weapon Upgrades",
+  evasiveManeuvering: "Evasive Maneuvering",
 } as const;
 
 /** Weapon family from the module's inventory group name (e.g. "Hybrid Weapon"). */
@@ -94,6 +96,10 @@ export interface ResolvedFit {
   items: BudgetItemInput[];
   drones: BudgetDroneInput[];
   notes: string[];
+  /** Hull inertia (dogma attr "agility", a.k.a. Inertia Modifier); null when the SDE lacks it. */
+  hullInertia: number | null;
+  /** Per-item agility/mass attrs for the propulsion report (fitted items only). */
+  propulsionItems: PropulsionItemInput[];
 }
 
 export function resolveBudgetInputs(db: ReturnType<typeof getDatabase>, parsed: ParsedEft): ResolvedFit {
@@ -124,6 +130,8 @@ export function resolveBudgetInputs(db: ReturnType<typeof getDatabase>, parsed: 
 
   const items: BudgetItemInput[] = [];
   const drones: BudgetDroneInput[] = [];
+  const propulsionItems: PropulsionItemInput[] = [];
+  const hullInertia = (hullAttrs.get("agility") as number | undefined) ?? null;
 
   for (const item of parsed.items) {
     if (item.flag === "Cargo") continue; // charges/consumables: no fitting budget
@@ -185,9 +193,18 @@ export function resolveBudgetInputs(db: ReturnType<typeof getDatabase>, parsed: 
       pgDrawbackPct,
       drawbackFamily,
     });
+
+    propulsionItems.push({
+      name: item.name,
+      flag: item.flag,
+      offline: item.offline,
+      agilityMultiplierPct: attrs.get("agilityMultiplier") ?? undefined,
+      agilityBonusPct: attrs.get("agilityBonus") ?? undefined,
+      massAdditionKg: attrs.get("massAddition") ?? undefined,
+    });
   }
 
-  return { hull, items, drones, notes };
+  return { hull, items, drones, notes, hullInertia, propulsionItems };
 }
 
 /** Fetch the character's trained levels for the budget-relevant skills. */
@@ -224,15 +241,49 @@ export async function fetchBudgetSkillLevels(
       powerGridManagement: levels.powerGridManagement ?? 0,
       weaponUpgrades: levels.weaponUpgrades ?? 0,
       advancedWeaponUpgrades: levels.advancedWeaponUpgrades ?? 0,
+      evasiveManeuvering: levels.evasiveManeuvering ?? 0,
     },
     source: `character ${char.characterName} (ESI)`,
   };
 }
 
+// Hull base mass: the SDE's dgmTypeAttributes lacks attr 'mass' for ships
+// (confirmed on the Viator: ESI universe/types carries it, the sqlite dump
+// does not). SDE first, then a cached public ESI fetch, then null.
+const hullMassCache = new Map<number, number | null>();
+
+export async function fetchHullMassKg(
+  db: ReturnType<typeof getDatabase>,
+  typeId: number
+): Promise<number | null> {
+  const sdeRow = db
+    .prepare(
+      `SELECT COALESCE(v.valueFloat, v.valueInt) AS mass
+       FROM dgmTypeAttributes v JOIN dgmAttributeTypes a ON v.attributeID = a.attributeID
+       WHERE v.typeID = ? AND a.attributeName = 'mass'`
+    )
+    .get(typeId) as { mass: number | null } | undefined;
+  const sdeMass = sdeRow?.mass;
+  if (sdeMass && sdeMass > 0) return Number(sdeMass);
+
+  if (hullMassCache.has(typeId)) return hullMassCache.get(typeId) ?? null;
+
+  let mass: number | null = null;
+  try {
+    // Public endpoint — no auth. Static data, cached for a day.
+    const type = await esiGet<{ mass?: number }>(`/universe/types/${typeId}/`, { cacheTtlMs: 86_400_000 });
+    mass = typeof type.mass === "number" && type.mass > 0 ? type.mass : null;
+  } catch {
+    mass = null; // ESI unreachable — propulsion section reports unavailable
+  }
+  hullMassCache.set(typeId, mass);
+  return mass;
+}
+
 /** Re-parse + resolve in one step (used by check_fitting). */
 export function parseAndResolve(db: ReturnType<typeof getDatabase>, eft: string): { parsed: ParsedEft; resolved: ResolvedFit } {
   const parsed = parseEftFormat(db, eft);
-  if (!parsed.shipTypeId) return { parsed, resolved: { hull: emptyHull(), items: [], drones: [], notes: [] } };
+  if (!parsed.shipTypeId) return { parsed, resolved: { hull: emptyHull(), items: [], drones: [], notes: [], hullInertia: null, propulsionItems: [] } };
   return { parsed, resolved: resolveBudgetInputs(db, parsed) };
 }
 
