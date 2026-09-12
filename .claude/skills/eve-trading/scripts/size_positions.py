@@ -9,7 +9,7 @@ skill's required format: Item | Unit price | Units | Cost | Margin | Running.
 This exists because the same sizing/running-total/buffer-check logic has
 been hand-rewritten inline many times across trading sessions — pulling it
 into one script removes that repetition and the chance of an arithmetic
-slip landing in front of Ramon.
+slip landing in front of the user.
 
 Usage as a library (typical case, called from a Python one-liner or short
 snippet inside the session rather than as a standalone CLI):
@@ -52,7 +52,7 @@ def size_positions(
     wallet: total available capital (ISK) to size against.
     buffer_target_pct: minimum buffer to preserve, as a percent of wallet.
         Default 10 (matches the skill's default combined-allocation target;
-        pass a different value if Ramon has specified one, e.g. a flat
+        pass a different value if the user has specified one, e.g. a flat
         300M on a ~3B portfolio works out to a different pct at other scales).
     stop_at_buffer: if True (default), stop adding rows once including the
         next one would breach the buffer target, and report the rest as
