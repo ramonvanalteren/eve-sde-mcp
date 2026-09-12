@@ -181,6 +181,13 @@ export function startLoginFlow(clientId: string, scopes?: string[]): { authUrl: 
   return { authUrl };
 }
 
+/** The in-flight login flow's promise, or null when none is active.
+ *  Lets concurrent auto-login waiters share one flow instead of
+ *  superseding each other. */
+export function getPendingLogin(): Promise<AuthResult> | null {
+  return pendingPromise;
+}
+
 export async function waitForLogin(): Promise<AuthResult> {
   if (!pendingPromise) {
     throw new Error("No login flow in progress. Call esi_login first.");
