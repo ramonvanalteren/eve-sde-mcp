@@ -11,7 +11,7 @@ This skill covers four workflows for a production operation that feeds an existi
 
 1. **Build-margin verification** (always first) — price a job BEFORE committing runs: `price_build` with materials at live prices, ME-adjusted, plus installation cost, against the product's net sell. The industry twin of the eve-trading skill's margin-verification rule.
 2. **Production review** — re-verify every active manufacturing job (from `get_industry_jobs`) against live margins; keep / don't-relist / scale decisions, plus slot economics.
-3. **New candidate selection** — evaluating the next BPO: margin, liquidity, BPO amortization, index, and pipeline synergy.
+3. **New candidate selection** — including DISCOVERY when no candidate is in hand: `scan_builds` screens every market-obtainable T1 BPO in a category (or a specific product list) with bulk adjusted prices, then live-verifies the top candidates at a station with full order-book margins and 30-day traded volume. The closed SDE blueprint universe makes industry discovery self-sufficient — **no external tier feeds (A4E-style) are needed**, unlike trading discovery. Then: margin, liquidity, BPO amortization, index, and pipeline synergy.
 4. **Industry knowledge** — ME/TE, facility types and rig bonuses, system cost indices, invention, and what the tools can and cannot verify.
 
 **Explicitly out of scope:** the daily-close ledger as production P&L (see below), and live repricing of product sell orders (that's the trading skill's repricing exclusion — in-client).
@@ -37,7 +37,7 @@ Until bill-of-materials linkage is built into the close engine (planned), **trea
 |---|---|
 | About to commit runs / any build margin is discussed | [reference/build-margin-verification.md](reference/build-margin-verification.md) — the price_build procedure, both acquisition bases, ME rounding, thin books |
 | "Production review" / how are my jobs doing | [reference/workflow-production-review.md](reference/workflow-production-review.md) + build-margin-verification |
-| "What should I build" / new BPO / next production line | [reference/workflow-new-candidates.md](reference/workflow-new-candidates.md) + build-margin-verification |
+| "What should I build" / new BPO / next production line | [reference/workflow-new-candidates.md](reference/workflow-new-candidates.md) + build-margin-verification — includes the discovery step (scan_builds) |
 | ME/TE, facilities, rig bonuses, cost indices, invention, research jobs | [reference/industry-knowledge.md](reference/industry-knowledge.md) |
 
 References are one level deep: read exactly what the table says for the current request.

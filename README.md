@@ -131,6 +131,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `get_industry_jobs` | Active/recent manufacturing, research, invention jobs |
 | `get_industry_cost_indices` | System cost indices for industry (public) |
 | `price_build` | Price a manufacturing job before committing runs: ME-adjusted blueprint materials at live market prices + installation cost vs the product's net sell — unit build cost and margin on both acquisition bases (materials at sell orders = instant/conservative, at buy orders = patient), book depths, thin-book warnings. Born from a production audit that found a 400-run job committed at +0.9% margin |
+| `scan_builds` | Discover industry candidates: screen every market-obtainable T1 manufacturing BPO in a category (or a specific product list — synergy mode) with ESI bulk adjusted prices, then LIVE-verify the top candidates at a station (order-book margins on both bases, 30-day traded volume, book depths, input cost-share). Screen ranks, verification decides — the closed SDE blueprint universe makes industry discovery self-sufficient, no external tier feeds needed |
 | `get_character_assets` | Items in hangars/containers with names |
 | `get_character_contracts` | Courier, item exchange, auction contracts |
 
