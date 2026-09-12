@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
+import { parseEftFormat } from "../fitting/eft.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
 
 interface EsiOrder {
@@ -493,6 +494,70 @@ export function registerMarketTools(server: McpServer): void {
         itemCount: results.length,
         items: sorted,
         errors: results.filter((r) => "error" in r),
+      });
+    }
+  );
+
+  server.tool(
+    "price_fitting",
+    "Price an EFT-format fit at a station: sums the cheapest sell order per item (hull, modules, drones, charges, cargo) from live market orders. Default is Jita 4-4 (60003760) in The Forge. Useful before recommending or saving a fit ('can I afford to fly this 10x over?') and for comparing budget vs bling variants. Uses cheapest-station sell orders — the real acquisition cost; broker fees don't apply to buying.",
+    {
+      eft: z.string().describe("EFT format fitting string"),
+      location_id: z.number().default(60003760).describe("Station to price at (default 60003760 = Jita 4-4)"),
+      region_id: z.number().default(10000002).describe("Region to search orders in (default 10000002 = The Forge)"),
+    },
+    async ({ eft, location_id, region_id }) => {
+      const db = getDatabase();
+      const parsed = parseEftFormat(db, eft);
+      if (parsed.errors.length > 0 || !parsed.shipTypeId) {
+        return jsonResult({ valid: false, errors: parsed.errors });
+      }
+
+      // Needed quantities: hull 1x, slot modules 1x each, bay/cargo items by quantity
+      const needed = new Map<number, { name: string; qty: number }>();
+      needed.set(parsed.shipTypeId, { name: parsed.shipName, qty: 1 });
+      for (const it of parsed.items) {
+        const qty = it.flag.startsWith("HiSlot") || it.flag.startsWith("MedSlot") ||
+          it.flag.startsWith("LoSlot") || it.flag.startsWith("RigSlot") ||
+          it.flag.startsWith("SubSystemSlot") ? 1 : it.quantity;
+        const prev = needed.get(it.type_id);
+        needed.set(it.type_id, { name: it.name, qty: (prev?.qty ?? 0) + qty });
+      }
+
+      const missing: string[] = [];
+      const priced: Array<{ name: string; qty: number; unitPrice: number; subtotal: number }> = [];
+
+      const results = await mapConcurrent([...needed.entries()], 4, async ([typeId, need]) => {
+        const orders = await esiGet<EsiOrder[]>(
+          `/markets/${region_id}/orders/?order_type=sell&type_id=${typeId}`,
+          { public: true, cacheTtlMs: ESI_CACHE_TTL }
+        );
+        const atStation = orders.filter((o) => !o.is_buy_order && o.location_id === location_id);
+        const best = atStation.length > 0 ? Math.min(...atStation.map((o) => o.price)) : null;
+        return { typeId, need, best };
+      });
+
+      let total = 0;
+      for (const r of results) {
+        if (r.best === null) {
+          missing.push(`${r.need.name} (no sell orders at ${location_id})`);
+        } else {
+          const subtotal = r.best * r.need.qty;
+          total += subtotal;
+          priced.push({ name: r.need.name, qty: r.need.qty, unitPrice: r.best, subtotal });
+        }
+      }
+
+      return jsonResult({
+        ship: parsed.shipName,
+        fitName: parsed.fitName,
+        locationId: location_id,
+        priced,
+        totalCost: total,
+        totalCostFormatted: `${Math.round(total).toLocaleString()} ISK`,
+        missing: missing.length > 0 ? missing : undefined,
+        warnings: parsed.warnings.length > 0 ? parsed.warnings : undefined,
+        note: "Cheapest sell order per item at the station. Skill reductions, insurance, and hull-loss risk are your problem.",
       });
     }
   );

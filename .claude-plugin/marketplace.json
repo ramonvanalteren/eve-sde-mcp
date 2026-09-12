@@ -1,0 +1,33 @@
+{
+  "name": "eve-sde",
+  "owner": {
+    "name": "Ramon van Alteren",
+    "url": "https://github.com/ramonvanalteren"
+  },
+  "plugins": [
+    {
+      "name": "eve-trading",
+      "source": "./skills/eve-trading",
+      "description": "Hybrid station trading skill: buy orders at a low-fee Perimeter structure (range 1 into Jita 4-4), sell orders at Jita 4-4. New position selection from saved A4E tier URLs, buy/sell portfolio review, inventory risk, pipeline performance, and daily close against the eve-sde-mcp ledger.",
+      "keywords": [
+        "eve-online",
+        "station-trading",
+        "market",
+        "jita",
+        "perimeter"
+      ]
+    },
+    {
+      "name": "eve-fitting",
+      "source": "./skills/eve-fitting",
+      "description": "EVE Online ship fitting best practices: SDE-verified hull data before any fit, hull-bonus-driven design, role-coherent tank/range, skill-aware fitting math. Works with the eve-sde-mcp SDE/ESI tools.",
+      "keywords": [
+        "eve-online",
+        "fitting",
+        "ships",
+        "sde",
+        "pvp"
+      ]
+    }
+  ]
+}
