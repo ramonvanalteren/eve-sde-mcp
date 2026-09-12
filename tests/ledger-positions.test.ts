@@ -128,11 +128,30 @@ describe("buildPositionCloses", () => {
     expect(t200.realizedPnlNetAfterExitFees).toBe(t200.realizedPnlNet - 10);
   });
 
-  it("defaults exit-fee attribution to 0 when no attribution is provided", () => {
+  it("carries acquisition-fee attribution and nets both sides into realizedPnlNetAllIn", () => {
+    // Type 100's position: 40 of exit churn and 60 of acquisition churn
+    // spent acquiring the units that were sold today. The all-in view nets
+    // both; the day-exact figures stay untouched.
+    const consumptions = [sell(100, 10, 900_000, 1_000_000)];
+    const exitFees = new Map([[100, { total: 40, relisting: 15 }]]);
+    const acquisitionFees = new Map([[100, { total: 60, relisting: 25 }]]);
+    const positions = buildPositionCloses(consumptions, [], 0, [], exitFees, acquisitionFees);
+
+    const t100 = positions.find((p) => p.typeId === 100)!;
+    expect(t100.acquisitionFeesAttributed).toBe(60);
+    expect(t100.acquisitionFeesRelistingAttributed).toBe(25);
+    expect(t100.exitFeesAttributed).toBe(40);
+    expect(t100.realizedPnlNetAllIn).toBe(t100.realizedPnlNet - 40 - 60);
+    // the exit-only view is unchanged by the acquisition overlay
+    expect(t100.realizedPnlNetAfterExitFees).toBe(t100.realizedPnlNet - 40);
+  });
+
+  it("defaults both attribution layers to 0 when not provided", () => {
     const positions = buildPositionCloses([sell(100, 1, 100, 200)], [], 0, []);
     const t100 = positions.find((p) => p.typeId === 100)!;
     expect(t100.exitFeesAttributed).toBe(0);
-    expect(t100.exitFeesRelistingAttributed).toBe(0);
+    expect(t100.acquisitionFeesAttributed).toBe(0);
     expect(t100.realizedPnlNetAfterExitFees).toBe(t100.realizedPnlNet);
+    expect(t100.realizedPnlNetAllIn).toBe(t100.realizedPnlNet);
   });
 });

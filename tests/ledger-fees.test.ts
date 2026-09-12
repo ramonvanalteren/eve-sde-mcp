@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { matchBrokerFees, estimateBrokerFeePct, type BrokerFeeEntry, type OrderRecord } from "../src/ledger/fees.js";
 
 const BROKER_PCT = 1.5;
+const pctFee = (pct: number) => (o: { price: number; volumeTotal: number }) => o.price * o.volumeTotal * (pct / 100);
 
 function order(
   orderId: number,
@@ -22,7 +23,7 @@ function fee(journalId: number, date: string, amount: number): BrokerFeeEntry {
 describe("matchBrokerFees", () => {
   it("matches a fee to its order by timestamp + expected-amount proximity, classified as a new listing", () => {
     const o = order(1, 100, "2026-08-18T12:00:00Z", 9_000_000, 5); // expected fee = 9M*5*1.5% = 675,000
-    const result = matchBrokerFees([fee(10, "2026-08-18T12:00:02Z", -675_000)], [o], [], BROKER_PCT);
+    const result = matchBrokerFees([fee(10, "2026-08-18T12:00:02Z", -675_000)], [o], [], pctFee(BROKER_PCT));
 
     expect(result.unmatched).toHaveLength(0);
     expect(result.matched).toEqual([
@@ -39,7 +40,7 @@ describe("matchBrokerFees", () => {
       [fee(11, "2026-08-18T12:00:01Z", -690_000)],
       [reissued],
       [prior],
-      BROKER_PCT
+      pctFee(BROKER_PCT)
     );
 
     expect(result.matched).toEqual([
@@ -51,7 +52,7 @@ describe("matchBrokerFees", () => {
 
   it("leaves a fee unmatched (no_candidate) when no order is close enough in time or amount", () => {
     const o = order(1, 100, "2026-08-18T08:00:00Z", 9_000_000, 5);
-    const result = matchBrokerFees([fee(12, "2026-08-18T12:00:00Z", -675_000)], [o], [], BROKER_PCT);
+    const result = matchBrokerFees([fee(12, "2026-08-18T12:00:00Z", -675_000)], [o], [], pctFee(BROKER_PCT));
 
     expect(result.matched).toHaveLength(0);
     expect(result.unmatched).toEqual([{ journalId: 12, date: "2026-08-18T12:00:00Z", amount: 675_000, reason: "no_candidate" }]);
@@ -63,7 +64,7 @@ describe("matchBrokerFees", () => {
     // Should not arbitrarily pick one.
     const a = order(1, 100, "2026-08-18T12:00:00Z", 9_000_000, 5);
     const b = order(2, 200, "2026-08-18T12:00:00Z", 9_000_000, 5);
-    const result = matchBrokerFees([fee(13, "2026-08-18T12:00:00Z", -675_000)], [a, b], [], BROKER_PCT);
+    const result = matchBrokerFees([fee(13, "2026-08-18T12:00:00Z", -675_000)], [a, b], [], pctFee(BROKER_PCT));
 
     expect(result.matched).toHaveLength(0);
     expect(result.unmatched[0]).toMatchObject({ journalId: 13, reason: "ambiguous" });
@@ -75,7 +76,7 @@ describe("matchBrokerFees", () => {
       [fee(14, "2026-08-18T12:00:00Z", -675_000), fee(15, "2026-08-18T12:00:01Z", -675_000)],
       [o],
       [],
-      BROKER_PCT
+      pctFee(BROKER_PCT)
     );
 
     // Only one fee can actually claim the single order; the other is left unmatched rather than reused.
@@ -90,7 +91,7 @@ describe("matchBrokerFees", () => {
       [fee(16, "2026-08-18T14:00:00Z", -450_000), fee(17, "2026-08-18T09:00:00Z", -675_000)],
       [a, b],
       [],
-      BROKER_PCT
+      pctFee(BROKER_PCT)
     );
 
     expect(result.unmatched).toHaveLength(0);

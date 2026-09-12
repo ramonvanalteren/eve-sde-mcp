@@ -17,8 +17,10 @@
 //    autoclose_runs; a dead MCP server is worse than a missed close
 //  - never write to stdout: that's the MCP JSON-RPC channel — logs go to
 //    stderr only
-//  - retries capped per close_date (default 3) so a persistent ESI/auth
-//    problem can't hammer the API all day
+//  - retries capped per close_date AND per-day sync attempts capped per
+//    character (default 3 each), and failed actions never accelerate the
+//    next tick — a dead refresh token or ESI outage backs off to the normal
+//    interval instead of hammering the API
 //  - one process, one synchronous SQLite connection: autoclose and tool
 //    calls serialize naturally; no locking needed
 
@@ -41,8 +43,10 @@ export interface AutoCloseConfig {
   tickMinutes: number;
   /** Closes wait until this UTC hour (11.5 = 11:30) so yesterday's market history is published. */
   minUtcHour: number;
-  /** Sync when the last successful sync is older than this many hours (data preservation for ESI's ~30-day windows). */
+  /** Sync when the last successful sync is older than this many hours (data preservation for ESI's ~30-day windows; also bounds how stale "recent" data can be). */
   syncMaxAgeHours: number;
+  /** Max sync attempts per character per UTC day — a dead refresh token or an ESI outage must not become a retry hammer. */
+  maxSyncAttemptsPerDay: number;
   /** How many days back to close gaps (kept below ESI's ~30-day journal window). */
   lookbackDays: number;
   /** Max close attempts per (character, close_date) before giving up on that date. */
@@ -55,10 +59,11 @@ export const DEFAULT_AUTOCLOSE_CONFIG: AutoCloseConfig = {
   enabled: true,
   tickMinutes: 30,
   minUtcHour: 11.5,
-  syncMaxAgeHours: 20,
+  syncMaxAgeHours: 4,
   lookbackDays: 25,
   maxAttemptsPerDate: 3,
   maxBackfillsPerTick: 5,
+  maxSyncAttemptsPerDay: 3,
 };
 
 /** Merge a (possibly partial, possibly invalid) config.json autoClose section over the defaults. */
@@ -77,6 +82,7 @@ export function mergeAutoCloseConfig(overrides: unknown): AutoCloseConfig {
     lookbackDays: num("lookbackDays", 1, 27) ?? DEFAULT_AUTOCLOSE_CONFIG.lookbackDays,
     maxAttemptsPerDate: num("maxAttemptsPerDate", 1, 50) ?? DEFAULT_AUTOCLOSE_CONFIG.maxAttemptsPerDate,
     maxBackfillsPerTick: num("maxBackfillsPerTick", 1, 30) ?? DEFAULT_AUTOCLOSE_CONFIG.maxBackfillsPerTick,
+    maxSyncAttemptsPerDay: num("maxSyncAttemptsPerDay", 1, 100) ?? DEFAULT_AUTOCLOSE_CONFIG.maxSyncAttemptsPerDay,
   };
 }
 
@@ -89,6 +95,14 @@ export interface CharacterCloseState {
   closedDates: Set<string>;
   /** Failed close attempts per close_date (kind='close', outcome='failed'). */
   failedAttempts: Record<string, number>;
+  /** Failed sync attempts for this character today (UTC) — caps retry hammering on dead tokens/ESI outages. */
+  failedSyncAttemptsToday: number;
+  /** True when the character's most recent sync attempt failed on token refresh
+   *  (dead/expired refresh token). The heartbeat skips such characters entirely —
+   *  ESI tools still fail loudly with an esi_login prompt on actual use, so
+   *  nothing autonomous should keep retrying auth. Clears after a successful
+   *  esi_login + sync. */
+  authBroken: boolean;
   /** Any wallet journal/transaction rows exist for this character. */
   hasActivity: boolean;
   /** UTC date (YYYY-MM-DD) of the earliest synced activity, null if none. */
@@ -154,6 +168,7 @@ export function planAutoCloseTick(
   const nowHour = utcHourFloat(now);
 
   for (const c of chars) {
+    if (c.authBroken) continue; // dead token: hands off until esi_login — see CharacterCloseState.authBroken
     const closes: AutoCloseAction[] = [];
 
     if (c.hasActivity && c.firstActivityDate) {
@@ -182,12 +197,17 @@ export function planAutoCloseTick(
 
     const syncStale =
       c.lastSyncedAtMs === null || now.getTime() - c.lastSyncedAtMs > cfg.syncMaxAgeHours * 3_600_000;
-    if (syncStale && planned.length === 0) {
+    if (syncStale && planned.length === 0 && c.failedSyncAttemptsToday < cfg.maxSyncAttemptsPerDay) {
       actions.push({
         type: "sync",
         characterId: c.characterId,
         characterName: c.characterName,
-        reason: c.lastSyncedAtMs === null ? "never_synced" : "stale",
+        reason:
+          c.failedSyncAttemptsToday > 0
+            ? "retry_after_failure"
+            : c.lastSyncedAtMs === null
+              ? "never_synced"
+              : "stale",
       });
     }
   }
@@ -243,6 +263,28 @@ export function gatherCharacterStates(): CharacterCloseState[] {
          GROUP BY close_date`
       )
       .all(c.characterId) as Array<{ close_date: string | null; n: number }>;
+    // The character's LATEST sync attempt (any day): if it died on token
+    // refresh, auth is broken until someone runs esi_login.
+    const lastSyncRun = db
+      .prepare(
+        `SELECT outcome, error, started_at FROM autoclose_runs
+         WHERE character_id = ? AND kind = 'sync' ORDER BY id DESC LIMIT 1`
+      )
+      .get(c.characterId) as { outcome: string; error: string | null; started_at: string } | undefined;
+    // Broken only while nothing has touched the tokens since the failure —
+    // an esi_login (or later successful refresh) writes updated_at, which
+    // hands the character back to the heartbeat for a retry.
+    const authBroken =
+      lastSyncRun?.outcome === "failed" &&
+      !!lastSyncRun.error?.includes("Token refresh failed") &&
+      c.updatedAt.getTime() < new Date(lastSyncRun.started_at).getTime();
+    const todayStartIso = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).toISOString();
+    const syncFailRow = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM autoclose_runs
+         WHERE character_id = ? AND kind = 'sync' AND outcome = 'failed' AND started_at >= ?`
+      )
+      .get(c.characterId, todayStartIso) as { n: number };
     const actRow = db
       .prepare(
         `SELECT MIN(d) AS first FROM (
@@ -262,6 +304,8 @@ export function gatherCharacterStates(): CharacterCloseState[] {
       lastSyncedAtMs: parseDbTimestamp(syncRow?.last_synced_at ?? null),
       closedDates: new Set(closedRows.map((r) => r.close_date)),
       failedAttempts,
+      failedSyncAttemptsToday: syncFailRow?.n ?? 0,
+      authBroken,
       hasActivity: !!actRow?.first,
       firstActivityDate: actRow?.first ? actRow.first.slice(0, 10) : null,
     };
@@ -291,7 +335,7 @@ function recordRun(
   );
 }
 
-async function executeAction(action: AutoCloseAction): Promise<void> {
+async function executeAction(action: AutoCloseAction): Promise<boolean> {
   const startedAtMs = Date.now();
   if (action.type === "sync") {
     try {
@@ -300,12 +344,13 @@ async function executeAction(action: AutoCloseAction): Promise<void> {
       stderr(
         `sync ${action.characterName}: +${r.journalInserted} journal, +${r.transactionsInserted} tx (${action.reason})`
       );
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       recordRun(action.characterId, "sync", null, startedAtMs, "failed", msg);
       stderr(`sync ${action.characterName} FAILED: ${msg}`);
+      return false;
     }
-    return;
   }
   try {
     const r = await runDailyClose(action.characterId, action.closeDate);
@@ -315,10 +360,12 @@ async function executeAction(action: AutoCloseAction): Promise<void> {
         `net ${Math.round(r.realizedPnlNet).toLocaleString()} ISK` +
         (r.flags.length > 0 ? ` [${r.flags.length} flag(s)]` : "")
     );
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     recordRun(action.characterId, "close", action.closeDate, startedAtMs, "failed", msg);
     stderr(`close ${action.characterName} ${action.closeDate} FAILED: ${msg}`);
+    return false;
   }
 }
 
@@ -341,13 +388,16 @@ async function tick(): Promise<void> {
       const states = gatherCharacterStates();
       const actions = planAutoCloseTick(new Date(), states, cfg);
       lastTickActions = actions.length;
+      let successes = 0;
       for (const action of actions) {
         if (stopped) break;
-        await executeAction(action);
+        if (await executeAction(action)) successes++;
       }
-      if (actions.length > 0) {
-        // A batch just ran — check again soon to finish backfill chains
-        // quickly instead of waiting a full tick interval.
+      if (successes > 0) {
+        // At least one action SUCCEEDED — check again soon to finish backfill
+        // chains quickly. Failed actions deliberately do NOT accelerate the
+        // tick: a dead token or ESI outage must back off to the normal
+        // interval (plus the per-day attempt caps), not hammer the API.
         nextDelayMs = Math.min(nextDelayMs, 60_000);
       }
     }

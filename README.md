@@ -64,14 +64,14 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 |------|-------------|
 | `sync_wallet_ledger` | Pull all currently-available wallet journal + transactions + orders into the local ledger |
 | `run_daily_close` | Sync, apply FIFO cost-basis matching, and compute a day's realized/unrealized P&L — defaults to the last completed UTC day (00:00–24:00); past dates get historical marks + reconstructed escrow, and every close reconciles NAV change vs. prior close; broker fees split into new-listing vs. relisting |
-| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. relisting-fee attribution and all-in net P&L per position |
+| `get_daily_close_by_position` | Same day-close, broken out per item type_id instead of one portfolio total, incl. both directions of relisting-fee attribution and all-in net P&L per position |
 | `get_daily_close` | Read a previously computed close for one date |
 | `get_close_range` | Read a range of computed closes, with summed totals |
-| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost and the relisting fees already sunk into each position's sell campaign) |
-| `get_effective_broker_fee_pct` | Estimate the character's real broker fee % from their own paid-fee history, no game-formula/standings lookup needed |
+| `get_open_lots` | List current open FIFO lots (unsold inventory with acquisition cost, all-in cost basis incl. acquisition churn, and the sell-side relisting fees already sunk per position) |
+| `get_station_fees` | Station broker-fee models for fee/order matching — config-first (`stationFees` in config.json), per-station derivation fallback, and discovery of unconfigured stations you trade at |
 | `get_autoclose_status` | Inspect the autonomous daily-close heartbeat: config, per-character coverage of recent days, and the run log |
 
-**Autonomous daily close.** While the server is running it closes days by itself: it syncs the wallet ledger once its last sync is older than 20 hours, and closes every completed UTC day (including backfilling gaps up to 25 days) once EVE downtime (~11:05 UTC) has published that day's market history — the default cutoff is 11:30 UTC. Everything is condition-based and idempotent, so a sleeping machine or a closed MCP client just means the next heartbeat catches up; nothing is lost as long as gaps stay under ESI's ~30-day windows. Every attempt (success or failure) is logged to the `autoclose_runs` table — `get_autoclose_status` shows coverage and history. Configure or disable via `~/.eve-sde/config.json`:
+**Autonomous daily close.** While the server is running it closes days by itself: it syncs the wallet ledger once its last sync is older than 4 hours, and closes every completed UTC day (including backfilling gaps up to 25 days) once EVE downtime (~11:05 UTC) has published that day's market history — the default cutoff is 11:30 UTC. Everything is condition-based and idempotent, so a sleeping machine or a closed MCP client just means the next heartbeat catches up; nothing is lost as long as gaps stay under ESI's ~30-day windows. Failed attempts never accelerate the next tick, and both closes and syncs are capped per day, so a dead refresh token or an ESI outage backs off to the normal interval instead of hammering the API. Every attempt (success or failure) is logged to the `autoclose_runs` table — `get_autoclose_status` shows coverage and history. Configure or disable via `~/.eve-sde/config.json`:
 
 ```json
 {
@@ -79,13 +79,29 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
     "enabled": true,
     "minUtcHour": 11.5,
     "tickMinutes": 30,
-    "syncMaxAgeHours": 20,
+    "syncMaxAgeHours": 4,
     "lookbackDays": 25,
     "maxAttemptsPerDate": 3,
-    "maxBackfillsPerTick": 5
+    "maxBackfillsPerTick": 5,
+    "maxSyncAttemptsPerDay": 3
   }
 }
 ```
+
+**Station fee models (config-first).** Broker fees differ per station, and the ledger's fee/order matching needs each station's model: `~/.eve-sde/config.json` pins them. Components are **additive** — expected fee = order value × pct/100 + flat (a pure-percentage station sets only `brokerFeePct`; a Perimeter-style structure sets the 0.5% SCC surcharge plus its flat structure fee). Stations not in config derive a percentage from the character's own unambiguous fee/order history; stations with neither use the generic default and are flagged. `salesTaxPct` covers the character-level sales tax used for net-of-tax marks.
+
+```json
+{
+  "clientId": "your_client_id_here",
+  "salesTaxPct": 3.4,
+  "stationFees": {
+    "60003760": { "brokerFeePct": 1.491, "label": "Jita 4-4 CNAP" },
+    "1044752365771": { "brokerFeePct": 0.5, "brokerFeeFlat": 100, "label": "Perimeter 0.0% Neutral States Market HQ" }
+  }
+}
+```
+
+`get_station_fees` shows the resolution per station and lists any unconfigured stations you trade at.
 
 ### Killmails (ESI)
 

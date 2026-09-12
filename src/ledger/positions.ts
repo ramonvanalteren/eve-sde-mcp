@@ -49,6 +49,12 @@ export interface PositionClose {
   exitFeesRelistingAttributed: number;
   /** realizedPnlNet minus exitFeesAttributed — the position's P&L carrying the full cost of getting it sold. */
   realizedPnlNetAfterExitFees: number;
+  /** Buy-side mirror of exitFeesAttributed: the acquisition-campaign fees (cancelled/re-placed buy orders) attributed to this position's buys today (heuristic, see attributeAcquisitionFees). Lifetime overlay, NOT an extra expense — already counted in brokerFeesPaid when paid. */
+  acquisitionFeesAttributed: number;
+  /** The relisting-churn portion of acquisitionFeesAttributed. */
+  acquisitionFeesRelistingAttributed: number;
+  /** realizedPnlNet minus both exit AND acquisition fees — the position's all-in P&L from acquisition to exit. */
+  realizedPnlNetAllIn: number;
   unrealizedPnl: number | null;
   remainingQty: number | null;
   costBasis: number | null;
@@ -61,7 +67,8 @@ export function buildPositionCloses(
   matchedFees: PositionMatchedFee[],
   totalSalesTax: number,
   unrealizedByType: PositionUnrealized[],
-  exitFeesByType?: Map<number, { total: number; relisting: number }>
+  exitFeesByType?: Map<number, { total: number; relisting: number }>,
+  acquisitionFeesByType?: Map<number, { total: number; relisting: number }>
 ): PositionClose[] {
   const byType = new Map<number, PositionClose>();
 
@@ -82,6 +89,9 @@ export function buildPositionCloses(
         exitFeesAttributed: 0,
         exitFeesRelistingAttributed: 0,
         realizedPnlNetAfterExitFees: 0,
+        acquisitionFeesAttributed: 0,
+        acquisitionFeesRelistingAttributed: 0,
+        realizedPnlNetAllIn: 0,
         unrealizedPnl: null,
         remainingQty: null,
         costBasis: null,
@@ -142,6 +152,10 @@ export function buildPositionCloses(
     p.exitFeesAttributed = exitFees?.total ?? 0;
     p.exitFeesRelistingAttributed = exitFees?.relisting ?? 0;
     p.realizedPnlNetAfterExitFees = p.realizedPnlNet - p.exitFeesAttributed;
+    const acquisitionFees = acquisitionFeesByType?.get(p.typeId);
+    p.acquisitionFeesAttributed = acquisitionFees?.total ?? 0;
+    p.acquisitionFeesRelistingAttributed = acquisitionFees?.relisting ?? 0;
+    p.realizedPnlNetAllIn = p.realizedPnlNet - p.exitFeesAttributed - p.acquisitionFeesAttributed;
   }
 
   return [...byType.values()].sort((a, b) => a.typeId - b.typeId);

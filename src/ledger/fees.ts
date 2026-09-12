@@ -32,6 +32,12 @@ export interface OrderRecord {
   volumeTotal: number;
   issued: string;
   state: OrderState;
+  /** Station/structure the order was placed at. Broker fee rates are
+   *  per-station (standings to the owner, or structure tax) — a trader can
+   *  legitimately place buys at a low-fee station and sells at another.
+   *  Optional for backward compatibility with flat-rate call sites; omitted
+   *  location lumps into one "unknown station" bucket. */
+  locationId?: number | null;
 }
 
 export type FeeClassification = "new_listing" | "relist";
@@ -78,15 +84,15 @@ const AMBIGUITY_MARGIN = 0.15;
  * @param priorOrdersForClassification a broader pool (any date) used only to
  *   tell whether a matched order is a relist of an earlier position — needs
  *   to include cancelled orders from before `candidateOrders`' date range.
- * @param brokerFeePct the character's actual effective broker fee rate — pass
- *   explicitly, same rule as the rest of this skill (don't rely on a generic
- *   default and silently mis-price every match).
+ * @param expectedFeeFor the expected placement fee for a candidate order —
+ *   station-aware (see station-fees.ts): a percentage model returns value ×
+ *   rate, a flat-fee structure returns its fixed ISK amount.
  */
 export function matchBrokerFees(
   fees: BrokerFeeEntry[],
   candidateOrders: OrderRecord[],
   priorOrdersForClassification: OrderRecord[],
-  brokerFeePct: number
+  expectedFeeFor: (order: OrderRecord) => number
 ): FeeMatchResult {
   const priorIssuedByKey = new Map<string, string[]>();
   for (const o of priorOrdersForClassification) {
@@ -123,7 +129,7 @@ export function matchBrokerFees(
       const timeDeltaMs = Math.abs(feeTime - new Date(order.issued).getTime());
       if (timeDeltaMs > TIME_TOLERANCE_MS) continue;
 
-      const expectedFee = order.price * order.volumeTotal * (brokerFeePct / 100);
+      const expectedFee = expectedFeeFor(order);
       if (expectedFee <= 0) continue;
       const amountDeltaPct = Math.abs(expectedFee - feeAbs) / expectedFee;
       if (amountDeltaPct > AMOUNT_TOLERANCE_PCT) continue;
@@ -193,8 +199,13 @@ export interface FeeRateEstimate {
   observations: FeeRateObservation[];
 }
 
-export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord[]): FeeRateEstimate {
-  const observations: FeeRateObservation[] = [];
+/** Internal: unambiguous 1:1 fee/order pairs with the ORDER retained, so
+ *  callers can group observations per station. */
+function pairFeeObservations(
+  fees: BrokerFeeEntry[],
+  orders: OrderRecord[]
+): Array<{ order: OrderRecord; observedPct: number }> {
+  const observations: Array<{ order: OrderRecord; observedPct: number }> = [];
 
   for (const fee of fees) {
     const feeTime = new Date(fee.date).getTime();
@@ -213,19 +224,68 @@ export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord
     const orderValue = order.price * order.volumeTotal;
     if (orderValue <= 0) continue;
 
-    observations.push({ orderId: order.orderId, observedPct: (Math.abs(fee.amount) / orderValue) * 100 });
+    observations.push({ order, observedPct: (Math.abs(fee.amount) / orderValue) * 100 });
   }
+
+  return observations;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord[]): FeeRateEstimate {
+  const paired = pairFeeObservations(fees, orders);
+  const observations = paired.map((p) => ({ orderId: p.order.orderId, observedPct: p.observedPct }));
 
   if (observations.length < MIN_SAMPLES_FOR_ESTIMATE) {
     return { estimatedPct: null, sampleCount: observations.length, observations };
   }
 
-  const sorted = [...observations].sort((a, b) => a.observedPct - b.observedPct);
-  const mid = Math.floor(sorted.length / 2);
-  const estimatedPct =
-    sorted.length % 2 === 0 ? (sorted[mid - 1].observedPct + sorted[mid].observedPct) / 2 : sorted[mid].observedPct;
+  return { estimatedPct: median(observations.map((o) => o.observedPct)), sampleCount: observations.length, observations };
+}
 
-  return { estimatedPct, sampleCount: observations.length, observations };
+export interface StationFeeRateEstimate {
+  /** Station/structure id; null = orders without a synced location. */
+  locationId: number | null;
+  estimatedPct: number | null;
+  sampleCount: number;
+}
+
+/**
+ * Per-station broker fee rates — the multi-station form of
+ * estimateBrokerFeePct. Broker fee rates are station-specific (standings to
+ * the station owner, or structure tax for player structures), so a character
+ * buying at one station and selling at another genuinely pays two different
+ * rates; a single blended estimate would match neither side's fees. Each
+ * station needs MIN_SAMPLES_FOR_ESTIMATE unambiguous pairs of its own —
+ * stations without enough history return estimatedPct: null and the caller
+ * falls back (and flags) rather than guessing.
+ */
+export function estimateBrokerFeePctByLocation(
+  fees: BrokerFeeEntry[],
+  orders: OrderRecord[]
+): Map<number | null, StationFeeRateEstimate> {
+  const paired = pairFeeObservations(fees, orders);
+  const byLocation = new Map<number | null, number[]>();
+  for (const p of paired) {
+    const key = p.order.locationId ?? null;
+    const arr = byLocation.get(key) ?? [];
+    arr.push(p.observedPct);
+    byLocation.set(key, arr);
+  }
+
+  const result = new Map<number | null, StationFeeRateEstimate>();
+  for (const [locationId, pcts] of byLocation) {
+    result.set(locationId, {
+      locationId,
+      estimatedPct: pcts.length >= MIN_SAMPLES_FOR_ESTIMATE ? median(pcts) : null,
+      sampleCount: pcts.length,
+    });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +453,183 @@ export function computeOpenChainSunkFees(
       relisting,
       perUnit: total / volume,
       perUnitRelisting: relisting / volume,
+      orderCount: campaign.length,
+    });
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Acquisition-fee attribution: the buy-side mirror of exit-fee attribution.
+// The relisting churn spent acquiring inventory (cancelled/re-placed buy
+// orders before the fill finally landed) is attributed to the lots that
+// campaign produced, as a lifetime overlay — never folded into lot cost
+// basis, because those fees are already expensed as brokerFeesPaid on the
+// days they were paid and capitalizing them would double-count realized
+// COGS in the daily view.
+//
+// Same campaign rule as the sell side, mirrored: a fully-filled buy order
+// closes out its acquisition campaign; the cancelled/expired buy orders
+// after it are the churn of the NEXT acquisition. One structural difference:
+// a buy order that fills produces multiple transactions (one per partial
+// fill), each its own FIFO lot — so the campaign fees are allocated across
+// ALL units acquired through the same filling order, proportionally by
+// quantity. The denominator is the sum of attributed transaction quantities
+// (the synced transaction history — the ledger's source of truth), not the
+// order's volume fields, which ESI only exposes as last-observed snapshots.
+// ---------------------------------------------------------------------------
+
+export interface AcquisitionFeeAttributionResult {
+  /** Per buy-transaction (per lot creation) fee share. */
+  perPurchase: Map<number, ExitFeeAttribution>;
+  unattributed: Array<{ transactionId: number; typeId: number; reason: "no_order_at_time" }>;
+}
+
+export function attributeAcquisitionFees(
+  orders: OrderRecord[],
+  orderFees: Map<number, number>,
+  purchases: ExitFeeSale[]
+): AcquisitionFeeAttributionResult {
+  const buyOrdersByType = new Map<number, OrderRecord[]>();
+  for (const o of orders) {
+    if (!o.isBuyOrder) continue;
+    const arr = buyOrdersByType.get(o.typeId) ?? [];
+    arr.push(o);
+    buyOrdersByType.set(o.typeId, arr);
+  }
+  for (const arr of buyOrdersByType.values()) {
+    arr.sort((a, b) => a.issued.localeCompare(b.issued) || a.orderId - b.orderId);
+  }
+
+  const perPurchase = new Map<number, ExitFeeAttribution>();
+  const unattributed: AcquisitionFeeAttributionResult["unattributed"] = [];
+
+  // Pass 1: resolve each purchase's filling order (latest buy order of the
+  // type issued at/before the purchase — one live buy listing per type, same
+  // heuristic as the sell side) and its campaign, bucketing total acquired
+  // quantity per filling order.
+  interface CampaignBucket {
+    campaignFees: number;
+    relistingFees: number;
+    acquiredQty: number;
+  }
+  const bucketByOrder = new Map<number, CampaignBucket>();
+  const bucketByPurchase = new Map<number, CampaignBucket>();
+
+  for (const purchase of purchases) {
+    const chain = buyOrdersByType.get(purchase.typeId) ?? [];
+
+    let liveIdx = -1;
+    for (let i = 0; i < chain.length; i++) {
+      if (chain[i].issued <= purchase.date) liveIdx = i;
+      else break;
+    }
+    if (liveIdx === -1) {
+      unattributed.push({ transactionId: purchase.transactionId, typeId: purchase.typeId, reason: "no_order_at_time" });
+      continue;
+    }
+
+    // The campaign begins after the last fully-filled buy order before the
+    // filling order — a fulfilled buy closed out that acquisition; the
+    // cancelled/expired re-places after it are this campaign's churn.
+    let campaignStart = 0;
+    for (let i = liveIdx - 1; i >= 0; i--) {
+      if (chain[i].state === "fulfilled") {
+        campaignStart = i + 1;
+        break;
+      }
+    }
+
+    let bucket = bucketByOrder.get(chain[liveIdx].orderId);
+    if (!bucket) {
+      let campaignFees = 0;
+      let relistingFees = 0;
+      for (let i = campaignStart; i <= liveIdx; i++) {
+        const fee = orderFees.get(chain[i].orderId) ?? 0;
+        campaignFees += fee;
+        if (i > campaignStart) relistingFees += fee;
+      }
+      bucket = { campaignFees, relistingFees, acquiredQty: 0 };
+      bucketByOrder.set(chain[liveIdx].orderId, bucket);
+    }
+    bucket.acquiredQty += purchase.quantity;
+    bucketByPurchase.set(purchase.transactionId, bucket);
+  }
+
+  // Pass 2: allocate each purchase its proportional per-unit share of the
+  // campaign fees. Every unit acquired through a filling order carries the
+  // same slice, so the campaign's fees converge exactly onto the units that
+  // actually arrived (including the churn of attempts that never filled).
+  for (const purchase of purchases) {
+    const bucket = bucketByPurchase.get(purchase.transactionId);
+    if (!bucket) continue; // unattributed in pass 1
+    const qty = Math.max(bucket.acquiredQty, 1);
+    perPurchase.set(purchase.transactionId, {
+      total: (bucket.campaignFees / qty) * purchase.quantity,
+      relisting: (bucket.relistingFees / qty) * purchase.quantity,
+    });
+  }
+
+  return { perPurchase, unattributed };
+}
+
+export interface OpenBuySunkFees {
+  typeId: number;
+  /** The currently-live buy listing this churn is attached to. */
+  liveOrderId: number | null;
+  /** Listing + relisting fees sunk into the still-unfilled acquisition attempt. */
+  total: number;
+  /** The relisting portion of `total`. */
+  relisting: number;
+  orderCount: number;
+}
+
+/**
+ * For each type with a live (or recently delisted) buy campaign: the fees
+ * sunk so far into acquiring units that have NOT arrived yet — pre-acquisition
+ * churn. Unlike the sell-side open chains, there is no per-unit figure: these
+ * fees bought no units. They attach to future lots once a fill lands (via
+ * attributeAcquisitionFees, whose campaign rule will sweep them in).
+ */
+export function computeOpenBuySunkFees(
+  orders: OrderRecord[],
+  orderFees: Map<number, number>
+): Map<number, OpenBuySunkFees> {
+  const buyOrdersByType = new Map<number, OrderRecord[]>();
+  for (const o of orders) {
+    if (!o.isBuyOrder) continue;
+    const arr = buyOrdersByType.get(o.typeId) ?? [];
+    arr.push(o);
+    buyOrdersByType.set(o.typeId, arr);
+  }
+
+  const result = new Map<number, OpenBuySunkFees>();
+  for (const [typeId, chain] of buyOrdersByType) {
+    chain.sort((a, b) => a.issued.localeCompare(b.issued) || a.orderId - b.orderId);
+
+    let lastFulfilled = -1;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      if (chain[i].state === "fulfilled") {
+        lastFulfilled = i;
+        break;
+      }
+    }
+    const campaign = chain.slice(lastFulfilled + 1);
+    if (campaign.length === 0) continue; // nothing being acquired
+
+    let total = 0;
+    let relisting = 0;
+    for (let i = 0; i < campaign.length; i++) {
+      const fee = orderFees.get(campaign[i].orderId) ?? 0;
+      total += fee;
+      if (i > 0) relisting += fee;
+    }
+    const live = campaign[campaign.length - 1];
+    result.set(typeId, {
+      typeId,
+      liveOrderId: live.state === "open" ? live.orderId : null,
+      total,
+      relisting,
       orderCount: campaign.length,
     });
   }
