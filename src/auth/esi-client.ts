@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { refreshAccessToken } from "./oauth.js";
-import { getCurrentCharacter, updateTokens, getTokens } from "./tokens.js";
+import { refreshAccessToken, startLoginFlow, waitForLogin } from "./oauth.js";
+import { getCurrentCharacter, updateTokens, getTokens, storeTokens, setCurrentCharacterId } from "./tokens.js";
 import type { StoredCharacter } from "./tokens.js";
 
 const ESI_BASE = "https://esi.evetech.net/latest";
@@ -30,6 +30,73 @@ function getCached<T>(key: string): T | undefined {
 
 function setCached(key: string, data: unknown, ttlMs: number): void {
   esiCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+/** A definitively dead refresh token (ESI invalid_grant) — the only failure
+ *  worth interrupting the user with a browser for. */
+export function isDeadRefreshToken(underlyingMsg: string): boolean {
+  return underlyingMsg.includes("invalid_grant");
+}
+
+/** The error a caller sees when a token refresh fails. */
+export function refreshFailureMessage(characterName: string, underlyingMsg: string, autoLoginStarted: boolean): string {
+  return (
+    `Token refresh failed for ${characterName}: ${underlyingMsg}. ` +
+    (autoLoginStarted
+      ? `A login page has been opened in your browser — authenticate as ${characterName}, then re-run this tool.`
+      : `Use the esi_login tool to re-authenticate.`)
+  );
+}
+
+// Auto-login: when a tool call hits a definitively dead refresh token, open
+// the SSO login flow in the browser instead of only suggesting it. The
+// triggering tool call still fails immediately (no 5-minute hang); a
+// background continuation stores the tokens once the user authenticates and
+// logs completion to stderr. Cooldown keeps a retry loop of failing tool
+// calls from opening a browser tab every time.
+let lastAutoLoginAt = 0;
+const AUTO_LOGIN_COOLDOWN_MS = 60_000;
+
+async function triggerAutoLogin(): Promise<boolean> {
+  if (Date.now() - lastAutoLoginAt < AUTO_LOGIN_COOLDOWN_MS) return false;
+  lastAutoLoginAt = Date.now();
+  let clientId: string;
+  try {
+    clientId = readClientId();
+  } catch {
+    return false; // no client id configured — a manual esi_login with client_id is needed
+  }
+  try {
+    const { authUrl } = startLoginFlow(clientId);
+    try {
+      const { execFile } = await import("child_process");
+      execFile("open", [authUrl], () => {
+        // best-effort; if the browser didn't open, the URL is in the error text
+      });
+    } catch {
+      // best-effort
+    }
+    void waitForLogin().then(
+      (result) => {
+        storeTokens(result.tokens, result.character);
+        setCurrentCharacterId(result.character.characterId);
+        process.stderr.write(
+          `[auto-login] Authenticated as ${result.character.characterName} — token fixed; re-run the tool that failed.\n`
+        );
+      },
+      (err) => {
+        process.stderr.write(
+          `[auto-login] Login flow ended without success: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      }
+    );
+    return true;
+  } catch (err) {
+    process.stderr.write(
+      `[auto-login] Could not start login flow: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return false;
+  }
 }
 
 export function readClientId(): string {
@@ -72,10 +139,8 @@ export async function getValidToken(
       process.stderr.write(`ESI token refreshed, valid for ${Math.round(newTokens.expiresAt.getTime() - Date.now()) / 1000}s\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Token refresh failed for ${character.characterName}: ${msg}. ` +
-        `Use the esi_login tool to re-authenticate.`
-      );
+      const autoLogin = isDeadRefreshToken(msg) ? await triggerAutoLogin() : false;
+      throw new Error(refreshFailureMessage(character.characterName, msg, autoLogin));
     }
   }
 
