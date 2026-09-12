@@ -8,6 +8,28 @@ description: Use this skill whenever helping a user build, validate, or iterate 
 This skill encodes hard-won lessons from iterative fitting sessions. Every rule
 below exists because the opposite was tried and failed, usually multiple times.
 
+**Scope and depth:** the rules here are universal — SDE verification, the four
+fitting constraints, the coherence checks, the build workflow — and apply to every
+hull. The worked examples and ammo tables, however, are Gallente/hybrid-weapon-
+centric (they grew out of hybrid frigate/destroyer sessions). Before trusting
+race-specific specifics (ammo tables, hull patterns) for projectile, missile, or
+laser ships, verify them from the SDE the same way — and extend this file when a
+new weapon system is fitted for the first time rather than improvising from memory.
+
+## Contents
+- CRITICAL RULE: Never Fit From Memory
+- The Four Fitting Constraints (CPU, powergrid, calibration, slots)
+- The CPU/PG Calculation Error
+- Hull Bonuses Drive Fit Design
+- Tank Philosophy by Role
+- Module Naming Conventions
+- Ammo Selection for Hybrid Weapons
+- Drone Verification
+- Fit Coherence Check
+- Workflow: Building a Fit
+- Using MCP/SDE Tools
+- Common Fitting Mistakes
+
 ## CRITICAL RULE: Never Fit From Memory
 
 Claude's training data contains EVE fitting information that is frequently wrong
@@ -263,24 +285,11 @@ Before presenting any fit, verify internal coherence:
 
 ## Using MCP/SDE Tools
 
-When EVE SDE MCP tools are available, use them for EVERY hull and module lookup.
-Key tools and their uses:
+When EVE SDE MCP tools are available, use them for EVERY hull and module lookup — the tools' own descriptions cover each interface; what matters here is the query recipes and the order of operations.
 
-- `search_types(query, category)` — find type IDs by name
-- `get_type(type_id)` — full hull/module info including description and bonuses
-- `get_type_attributes(type_id, filter)` — specific attributes (cpu, power,
-  drone, calibration, slot, etc.)
-- `compare_types(type_ids, attributes)` — side-by-side comparison of modules
-- `check_skill_requirements(type_id)` — verify character can use hull/module
-- `get_character_skills()` — pull live skill data
-- `get_skill_queue()` — check what's training
-- `parse_eft(eft)` — validate EFT format before saving
-- `save_fitting(character_id, eft, description)` — push to character in-game
-- `delete_fitting(character_id, fitting_id)` — remove old fits before saving updated versions
-
-**Important SDE attribute names:**
+**SDE attribute query recipes (the non-obvious filters):**
 - Slot counts: filter "slot" on hull type
-- CPU/PG output: filter "cpu" / "power" on hull type  
+- CPU/PG output: filter "cpu" / "power" on hull type
 - CPU/PG cost: filter "cpu" / "power" on module type
 - Drone bay: filter "drone" → droneCapacity (m³), droneBandwidth (Mbit/sec)
 - Calibration capacity: filter "calibration" → upgradeCapacity on hull
@@ -296,7 +305,6 @@ Key tools and their uses:
 6. `search_types` for each module, then `compare_types` for fitting costs
 7. `check_skill_requirements` against the active character
 8. `parse_eft` to validate before `save_fitting`
-
 
 ## Common Fitting Mistakes (All Encountered in Practice)
 
