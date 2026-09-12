@@ -8,16 +8,21 @@
 //   - Advanced Weapon Upgrades: -2% PG need of turrets/launchers per level
 //   - weapon-rig PG drawbacks: +drawback% PG need of the matching weapon family
 //
+//   - Evasive Maneuvering:  -5% inertia per level (consumed by propulsion.ts)
+//
 // Deliberately NOT a full dogma engine (pyfa's eos is the reference for
-// those): no stacking penalties, implants, boosters, overheat, command
-// bursts, DPS/EHP graphs, or capacitor simulation. Everything unmodeled is
-// reported in `unmodeled` so callers stay honest about the margin.
+// those): no implants, boosters, overheat, command bursts, DPS/EHP graphs,
+// capacitor simulation, velocity, or cargo math. Stacking penalties are
+// applied to inertia/align only (propulsion.ts), not other attributes.
+// Everything unmodeled is reported in `unmodeled` so callers stay honest
+// about the margin.
 
 export interface SkillLevels {
   cpuManagement: number;
   powerGridManagement: number;
   weaponUpgrades: number;
   advancedWeaponUpgrades: number;
+  evasiveManeuvering: number;
 }
 
 export interface BudgetItemInput {
@@ -267,7 +272,7 @@ export function computeFittingBudget(
     "Electronics Upgrades CPU reduction on electronic-upgrade modules (co-processors, signal amplifiers, ECCM) is NOT applied — those modules count at raw CPU.",
     "T3 subsystem CPU/PG output bonuses are not applied (subsystem slots counted only).",
     "Implants, boosters, overheat, and command bursts are not modeled.",
-    "No capacitor simulation or stacking-penalty math (pyfa territory).",
+    "No capacitor simulation, DPS/EHP, velocity, or cargo math (pyfa territory); stacking penalties are applied to inertia/align only (see propulsion).",
   ];
 
   return {
@@ -285,7 +290,7 @@ export function computeFittingBudget(
       maxActivePerType,
     },
     offline,
-    appliedSkills: { cpuManagement: cpuMgmt, powerGridManagement: pgMgmt, weaponUpgrades: wu, advancedWeaponUpgrades: awu },
+    appliedSkills: { cpuManagement: cpuMgmt, powerGridManagement: pgMgmt, weaponUpgrades: wu, advancedWeaponUpgrades: awu, evasiveManeuvering: lvl(skills.evasiveManeuvering) },
     unmodeled,
     violations,
   };

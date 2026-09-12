@@ -118,9 +118,19 @@ lists capacitor as unmodeled).
 
 Modules affecting the SAME attribute are stacking-penalized: the 2nd is ~87%
 effective, the 3rd ~57%, the 4th ~28% — beyond the third, a module is
-near-useless for its penalized bonus. This is fit-DESIGN math, not budget
-math (`check_fitting` doesn't compute it — it doesn't change whether a fit
-installs, only whether it's worth the slot).
+near-useless for its penalized bonus. This is fit-DESIGN math for most
+attributes: `check_fitting` applies stacking only to inertia/align (its
+propulsion section) — DPS/EHP/resist stacking remain pyfa territory and
+don't change whether a fit installs, only whether the slot is worth it.
+
+**Exception — align:** the stacking math IS in `check_fitting`'s propulsion
+section. Report align from there, never hand-compute it (the Viator lesson:
+hand-math claimed 2.5 s, the in-game sim read 5.53 s, and the engine
+reproduces the sim within ~2%). The three recurring hand-math traps it
+eliminates: the ln(2) shortcut instead of the game's ln(4) 75%-velocity
+formula (a 2× error), MWDs adding their massAddition while merely online,
+and nanofibers being inertia-only in the modern SDE (no mass/velocity
+component at all).
 
 - Damage mods (Mag Stab / BCS / DDAs): 3 is the practical ceiling; the 4th
   low is almost always better as tank/utility.
@@ -157,7 +167,12 @@ Upgrades (-5% turret/launcher CPU per level), Advanced Weapon Upgrades
 exact CPU/PG/calibration/slot/hardpoint/drone budgets plus everything it
 deliberately leaves unmodeled (Electronics Upgrades reductions, T3
 subsystem output, implants, boosters, overheat, capacitor — pyfa's eos is
-the reference for that tier).
+the reference for that tier). Its `propulsion` section computes mass,
+effective inertia, and align with the in-game ln(4) warp-entry formula
+(Evasive Maneuvering -5%/level, stack-penalized agility mods from modules
+and rigs, and prop-module mass additions while ONLINE — an MWD slows align
+before you ever cycle it) — sim-validated within ~2%. Report align from
+there, never by hand.
 
 The fallback rules when no tools are available still apply:
 - Never declare "doesn't fit" from raw math — if it's close (within ~15%),
