@@ -7,7 +7,6 @@ import { runDailyClose, runDailyClosePerPosition, getStoredClose, getStoredClose
 import { getLedgerDb } from "../ledger/db.js";
 import { autoCloseHeartbeatInfo } from "../ledger/autoclose.js";
 import {
-  estimateBrokerFeePct,
   matchBrokerFees,
   computeOpenChainSunkFees,
   attributeAcquisitionFees,
@@ -15,6 +14,13 @@ import {
   type BrokerFeeEntry,
   type OrderRecord,
 } from "../ledger/fees.js";
+import {
+  loadStationFeeSettings,
+  resolveStationFeeModels,
+  expectedFeeResolver,
+  formatFeeModel,
+  DEFAULT_BROKER_FEE_PCT,
+} from "../ledger/station-fees.js";
 
 export function registerLedgerTools(server: McpServer): void {
   server.tool(
@@ -35,8 +41,8 @@ export function registerLedgerTools(server: McpServer): void {
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to the most recently completed UTC day (yesterday) over its full 00:00–24:00 period. Use an explicit past date to backfill a missed day, or today's date for an intraday snapshot."),
-      broker_fee_pct: z.number().optional().describe("Character's actual effective broker fee percentage (e.g. 1.5 for Broker Relations IV + no standings) — used only to correlate brokers_fee journal entries to the order that caused them (expected fee = price * volume * this rate). If omitted, it's auto-derived from the character's own already-synced fee/order history (see get_effective_broker_fee_pct); the close's flags say which happened. Prefer passing it explicitly once you know the character's real rate."),
-      sales_tax_pct: z.number().default(3.6).describe("Character's actual effective sales tax percentage (e.g. 3.4 for Accounting V + no standings) — used to net today's unrealized mark-to-market value (best sell price * (1 - this/100)). Pass explicitly; the default is generic."),
+      broker_fee_pct: z.number().optional().describe("UNIFORM broker fee percentage applied to every station's fee/order matching — a legacy simple-case override. Only pass it when a single rate truly applies everywhere. Normally OMIT it: fees are resolved per station, CONFIG-FIRST, from ~/.eve-sde/config.json stationFees (see get_station_fees); stations not in config derive a percentage from the character's own unambiguous fee/order history, and stations with neither use the generic default (flagged in the report)."),
+      sales_tax_pct: z.number().optional().describe("Character's effective sales tax percentage, used to net unrealized marks (best sell price * (1 - this/100)). Resolution: this param > config.json salesTaxPct > generic default. Pin salesTaxPct in config.json and omit this."),
     },
     async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
       const report = await runDailyClose(character_id, close_date, broker_fee_pct, sales_tax_pct);
@@ -51,7 +57,7 @@ export function registerLedgerTools(server: McpServer): void {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       close_date: z.string().optional().describe("UTC date to close, YYYY-MM-DD. Defaults to yesterday (most recently completed UTC day)."),
       broker_fee_pct: z.number().optional().describe("Same as run_daily_close — omit to auto-derive from history."),
-      sales_tax_pct: z.number().default(3.6).describe("Same as run_daily_close — nets today's unrealized mark-to-market value."),
+      sales_tax_pct: z.number().optional().describe("Same resolution as run_daily_close (param > config.json salesTaxPct > default) — nets unrealized marks."),
     },
     async ({ character_id, close_date, broker_fee_pct, sales_tax_pct }) => {
       const report = await runDailyClosePerPosition(character_id, close_date, broker_fee_pct, sales_tax_pct);
@@ -62,8 +68,8 @@ export function registerLedgerTools(server: McpServer): void {
   );
 
   server.tool(
-    "get_effective_broker_fee_pct",
-    "Estimate the authenticated character's actual effective broker fee percentage from their own paid-fee history, without relying on the game's skill/standings formula (which would need a new ESI scope this server doesn't request). Finds unambiguous 1:1 pairs between brokers_fee journal entries and the order that caused them, and returns the median observed rate. Returns null if there isn't enough unambiguous history yet — run sync_wallet_ledger first, or place a few more orders and try again.",
+    "get_station_fees",
+    "Show the broker-fee model per station (location) used for fee/order matching — CONFIG-FIRST: pin models in ~/.eve-sde/config.json `stationFees` (e.g. Jita 4-4 60003760 {brokerFeePct: 1.491}; a Perimeter-style structure {brokerFeePct: 0.5, brokerFeeFlat: 100} — SCC surcharge pct + flat structure fee, additive). Stations not in config derive a percentage from the character's own unambiguous fee/order pairs; stations with neither show the generic default and should be pinned. Fee components are additive: expected fee = order value × pct/100 + flat. Also resolves the sales-tax percentage (explicit param > config.json salesTaxPct > default) — sales tax is character-level (sell-side only). Use this to discover unconfigured station IDs you trade at (each station seen in your orders appears here with its resolution status) and to verify config took effect.",
     {
       character_id: z.number().describe("Character ID"),
     },
@@ -73,7 +79,7 @@ export function registerLedgerTools(server: McpServer): void {
         .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
         .all(character_id) as Array<{ id: number; date: string; amount: number | null }>;
       const orderRows = db
-        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id FROM orders WHERE character_id = ?`)
         .all(character_id) as Array<{
         order_id: number;
         type_id: number;
@@ -82,6 +88,7 @@ export function registerLedgerTools(server: McpServer): void {
         volume_total: number;
         issued: string;
         state: OrderRecord["state"];
+        location_id: number | null;
       }>;
 
       const fees: BrokerFeeEntry[] = feeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
@@ -93,10 +100,37 @@ export function registerLedgerTools(server: McpServer): void {
         volumeTotal: r.volume_total,
         issued: r.issued,
         state: r.state,
+        locationId: r.location_id,
       }));
 
-      const estimate = estimateBrokerFeePct(fees, orders);
-      return jsonResult(estimate);
+      const settings = loadStationFeeSettings();
+      const resolution = resolveStationFeeModels(fees, orders, settings);
+      const stations = [...resolution.byStation.values()]
+        .map((m) => ({
+          stationId: m.key,
+          label: m.label ?? null,
+          fee: formatFeeModel(m.model),
+          model: m.model,
+          provenance: m.provenance,
+          unambiguousPairs: m.sampleCount ?? null,
+        }))
+        .sort((a, b) => (a.provenance === "default" ? -1 : b.provenance === "default" ? 1 : a.stationId.localeCompare(b.stationId)));
+      const unconfigured = stations.filter((st) => st.provenance === "default");
+      const notes: string[] = [
+        `Resolution order per station: config.json stationFees > derived from this character's unambiguous fee/order pairs > generic ${DEFAULT_BROKER_FEE_PCT}% default.`,
+        `Sales tax used: ${settings.salesTaxPct !== null ? `${settings.salesTaxPct}% (config.json salesTaxPct)` : "default (set salesTaxPct in config.json for precision)"}.`,
+      ];
+      if (unconfigured.length > 0) {
+        notes.push(
+          `Station(s) ${unconfigured.map((st) => st.stationId).join(", ")} appear in the order history with no config entry and no derivable rate — fee/order matching there uses the generic default. Pin them in ~/.eve-sde/config.json stationFees (flat-fee structures especially: their fees can't be derived from history as a rate).`
+        );
+      }
+      return jsonResult({
+        configPath: "~/.eve-sde/config.json",
+        salesTaxPct: settings.salesTaxPct,
+        stations,
+        notes,
+      });
     }
   );
 
@@ -235,7 +269,7 @@ export function registerLedgerTools(server: McpServer): void {
         .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
         .all(character_id) as Array<{ id: number; date: string; amount: number | null }>;
       const orderRows = db
-        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+        .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id FROM orders WHERE character_id = ?`)
         .all(character_id) as Array<{
         order_id: number;
         type_id: number;
@@ -244,6 +278,7 @@ export function registerLedgerTools(server: McpServer): void {
         volume_total: number;
         issued: string;
         state: OrderRecord["state"];
+        location_id: number | null;
       }>;
       const fees: BrokerFeeEntry[] = feeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 }));
       const orders: OrderRecord[] = orderRows.map((r) => ({
@@ -254,17 +289,25 @@ export function registerLedgerTools(server: McpServer): void {
         volumeTotal: r.volume_total,
         issued: r.issued,
         state: r.state,
+        locationId: r.location_id,
       }));
 
+      // Station fee models for sunk-fee attribution — same config-first
+      // resolution as the daily close (see get_station_fees).
+      const settings = loadStationFeeSettings();
+      const resolution = resolveStationFeeModels(fees, orders, settings);
       const notes: string[] = [];
-      const estimate = estimateBrokerFeePct(fees, orders);
-      const pctUsed = estimate.estimatedPct ?? 1.0;
-      if (estimate.estimatedPct === null) {
+      const modelSummary = [...resolution.byStation.values()]
+        .map((m) => `${m.key}: ${formatFeeModel(m.model)} (${m.provenance})`)
+        .join(", ");
+      notes.push(`station fee models — ${modelSummary}`);
+      const unconfigured = [...resolution.byStation.values()].filter((m) => m.provenance === "default");
+      if (unconfigured.length > 0) {
         notes.push(
-          `broker fee pct couldn't be derived yet (${estimate.sampleCount} unambiguous sample(s)) — used the generic 1.0% for fee/order matching, so sunk-fee figures may be off`
+          `station(s) ${unconfigured.map((m) => m.key).join(", ")} have no config entry and no derivable rate — their fees are matched against the generic ${DEFAULT_BROKER_FEE_PCT}% default, so sunk-fee figures there may be off; pin them in ~/.eve-sde/config.json stationFees`
         );
       }
-      const match = matchBrokerFees(fees, orders, [], pctUsed);
+      const match = matchBrokerFees(fees, orders, [], expectedFeeResolver(resolution));
       if (match.unmatchedTotal > 0) {
         notes.push(
           `${match.unmatchedTotal.toFixed(0)} ISK of broker fees couldn't be confidently matched to an order — excluded from sunk-fee attribution, so these figures are a floor, not an estimate`
@@ -330,8 +373,9 @@ export function registerLedgerTools(server: McpServer): void {
       });
       return jsonResult({
         count: lots.length,
-        brokerFeePctUsed: pctUsed,
-        brokerFeePctDerived: estimate.estimatedPct !== null,
+        stationFeeModels: Object.fromEntries(
+          [...resolution.byStation.values()].map((m) => [m.key, { fee: formatFeeModel(m.model), model: m.model, provenance: m.provenance }])
+        ),
         notes,
         openBuySunkFees,
         lots,

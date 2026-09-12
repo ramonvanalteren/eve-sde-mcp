@@ -32,6 +32,12 @@ export interface OrderRecord {
   volumeTotal: number;
   issued: string;
   state: OrderState;
+  /** Station/structure the order was placed at. Broker fee rates are
+   *  per-station (standings to the owner, or structure tax) — a trader can
+   *  legitimately place buys at a low-fee station and sells at another.
+   *  Optional for backward compatibility with flat-rate call sites; omitted
+   *  location lumps into one "unknown station" bucket. */
+  locationId?: number | null;
 }
 
 export type FeeClassification = "new_listing" | "relist";
@@ -78,15 +84,15 @@ const AMBIGUITY_MARGIN = 0.15;
  * @param priorOrdersForClassification a broader pool (any date) used only to
  *   tell whether a matched order is a relist of an earlier position — needs
  *   to include cancelled orders from before `candidateOrders`' date range.
- * @param brokerFeePct the character's actual effective broker fee rate — pass
- *   explicitly, same rule as the rest of this skill (don't rely on a generic
- *   default and silently mis-price every match).
+ * @param expectedFeeFor the expected placement fee for a candidate order —
+ *   station-aware (see station-fees.ts): a percentage model returns value ×
+ *   rate, a flat-fee structure returns its fixed ISK amount.
  */
 export function matchBrokerFees(
   fees: BrokerFeeEntry[],
   candidateOrders: OrderRecord[],
   priorOrdersForClassification: OrderRecord[],
-  brokerFeePct: number
+  expectedFeeFor: (order: OrderRecord) => number
 ): FeeMatchResult {
   const priorIssuedByKey = new Map<string, string[]>();
   for (const o of priorOrdersForClassification) {
@@ -123,7 +129,7 @@ export function matchBrokerFees(
       const timeDeltaMs = Math.abs(feeTime - new Date(order.issued).getTime());
       if (timeDeltaMs > TIME_TOLERANCE_MS) continue;
 
-      const expectedFee = order.price * order.volumeTotal * (brokerFeePct / 100);
+      const expectedFee = expectedFeeFor(order);
       if (expectedFee <= 0) continue;
       const amountDeltaPct = Math.abs(expectedFee - feeAbs) / expectedFee;
       if (amountDeltaPct > AMOUNT_TOLERANCE_PCT) continue;
@@ -193,8 +199,13 @@ export interface FeeRateEstimate {
   observations: FeeRateObservation[];
 }
 
-export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord[]): FeeRateEstimate {
-  const observations: FeeRateObservation[] = [];
+/** Internal: unambiguous 1:1 fee/order pairs with the ORDER retained, so
+ *  callers can group observations per station. */
+function pairFeeObservations(
+  fees: BrokerFeeEntry[],
+  orders: OrderRecord[]
+): Array<{ order: OrderRecord; observedPct: number }> {
+  const observations: Array<{ order: OrderRecord; observedPct: number }> = [];
 
   for (const fee of fees) {
     const feeTime = new Date(fee.date).getTime();
@@ -213,19 +224,68 @@ export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord
     const orderValue = order.price * order.volumeTotal;
     if (orderValue <= 0) continue;
 
-    observations.push({ orderId: order.orderId, observedPct: (Math.abs(fee.amount) / orderValue) * 100 });
+    observations.push({ order, observedPct: (Math.abs(fee.amount) / orderValue) * 100 });
   }
+
+  return observations;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+export function estimateBrokerFeePct(fees: BrokerFeeEntry[], orders: OrderRecord[]): FeeRateEstimate {
+  const paired = pairFeeObservations(fees, orders);
+  const observations = paired.map((p) => ({ orderId: p.order.orderId, observedPct: p.observedPct }));
 
   if (observations.length < MIN_SAMPLES_FOR_ESTIMATE) {
     return { estimatedPct: null, sampleCount: observations.length, observations };
   }
 
-  const sorted = [...observations].sort((a, b) => a.observedPct - b.observedPct);
-  const mid = Math.floor(sorted.length / 2);
-  const estimatedPct =
-    sorted.length % 2 === 0 ? (sorted[mid - 1].observedPct + sorted[mid].observedPct) / 2 : sorted[mid].observedPct;
+  return { estimatedPct: median(observations.map((o) => o.observedPct)), sampleCount: observations.length, observations };
+}
 
-  return { estimatedPct, sampleCount: observations.length, observations };
+export interface StationFeeRateEstimate {
+  /** Station/structure id; null = orders without a synced location. */
+  locationId: number | null;
+  estimatedPct: number | null;
+  sampleCount: number;
+}
+
+/**
+ * Per-station broker fee rates — the multi-station form of
+ * estimateBrokerFeePct. Broker fee rates are station-specific (standings to
+ * the station owner, or structure tax for player structures), so a character
+ * buying at one station and selling at another genuinely pays two different
+ * rates; a single blended estimate would match neither side's fees. Each
+ * station needs MIN_SAMPLES_FOR_ESTIMATE unambiguous pairs of its own —
+ * stations without enough history return estimatedPct: null and the caller
+ * falls back (and flags) rather than guessing.
+ */
+export function estimateBrokerFeePctByLocation(
+  fees: BrokerFeeEntry[],
+  orders: OrderRecord[]
+): Map<number | null, StationFeeRateEstimate> {
+  const paired = pairFeeObservations(fees, orders);
+  const byLocation = new Map<number | null, number[]>();
+  for (const p of paired) {
+    const key = p.order.locationId ?? null;
+    const arr = byLocation.get(key) ?? [];
+    arr.push(p.observedPct);
+    byLocation.set(key, arr);
+  }
+
+  const result = new Map<number | null, StationFeeRateEstimate>();
+  for (const [locationId, pcts] of byLocation) {
+    result.set(locationId, {
+      locationId,
+      estimatedPct: pcts.length >= MIN_SAMPLES_FOR_ESTIMATE ? median(pcts) : null,
+      sampleCount: pcts.length,
+    });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

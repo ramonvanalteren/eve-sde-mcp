@@ -14,15 +14,22 @@ import {
 } from "./fifo.js";
 import {
   matchBrokerFees,
-  estimateBrokerFeePct,
   attributeExitFees,
   attributeAcquisitionFees,
   type BrokerFeeEntry,
   type OrderRecord,
 } from "./fees.js";
+import {
+  loadStationFeeSettings,
+  resolveStationFeeModels,
+  expectedFeeResolver,
+  expectedFeeFromModels,
+  formatFeeModel,
+  DEFAULT_BROKER_FEE_PCT,
+  type StationFeeModel,
+} from "./station-fees.js";
 import { buildPositionCloses, type PositionConsumption, type PositionClose } from "./positions.js";
 
-const DEFAULT_BROKER_FEE_PCT = 1.0;
 // Matches get_portfolio_margins's own default (Accounting V + no standings);
 // pass explicitly for the character's actual rate, same rule as broker_fee_pct.
 const DEFAULT_SALES_TAX_PCT = 3.6;
@@ -278,6 +285,10 @@ export interface DailyCloseReport {
   brokerFeesUnmatched: number;
   /** The rate actually used for order/fee correlation — either what was passed, or derived from history (see flags for which). */
   brokerFeePctUsed: number;
+  /** The sales tax percentage used for net-of-tax marks: explicit param > config.json salesTaxPct > default. */
+  salesTaxPctUsed: number;
+  /** Per-station fee models used for fee/order matching (config-first; see station-fees.ts), keyed by station id — "unknown" for orders without a synced location. */
+  stationFeeModels: Record<string, StationFeeModel>;
   realizedPnlNet: number;
   unmatchedSellRevenue: number;
   unmatchedSellQty: number;
@@ -329,7 +340,7 @@ export async function runDailyClose(
   characterId: number | undefined,
   closeDate?: string,
   brokerFeePct?: number,
-  salesTaxPct: number = DEFAULT_SALES_TAX_PCT
+  salesTaxPct?: number
 ): Promise<DailyCloseReport> {
   const char = await getActiveCharacter(characterId);
   await syncWalletLedger(char.characterId);
@@ -398,7 +409,7 @@ export async function runDailyClose(
 
   const candidateOrderRows = db
     .prepare(
-      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id
        FROM orders WHERE character_id = ? AND issued >= ? AND issued < ?`
     )
     .all(char.characterId, start, end) as Array<{
@@ -409,10 +420,11 @@ export async function runDailyClose(
     volume_total: number;
     issued: string;
     state: OrderRecord["state"];
+    location_id: number | null;
   }>;
   const priorOrderRows = db
     .prepare(
-      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id
        FROM orders WHERE character_id = ? AND state = 'cancelled' AND issued < ?`
     )
     .all(char.characterId, end) as typeof candidateOrderRows;
@@ -425,6 +437,7 @@ export async function runDailyClose(
     volumeTotal: r.volume_total,
     issued: r.issued,
     state: r.state,
+    locationId: r.location_id,
   });
 
   // Global fee/order views over all synced history: used to auto-derive the
@@ -435,33 +448,73 @@ export async function runDailyClose(
     .prepare(`SELECT id, date, amount FROM wallet_journal WHERE character_id = ? AND ref_type = 'brokers_fee'`)
     .all(char.characterId) as Array<{ id: number; date: string; amount: number | null }>;
   const allOrderRows = db
-    .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state FROM orders WHERE character_id = ?`)
+    .prepare(`SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id FROM orders WHERE character_id = ?`)
     .all(char.characterId) as typeof candidateOrderRows;
 
-  let resolvedBrokerFeePct = brokerFeePct;
-  if (resolvedBrokerFeePct === undefined) {
-    const estimate = estimateBrokerFeePct(
-      allFeeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 })),
-      allOrderRows.map(toOrderRecord)
+  // Per-station broker fee rates. Rates are station-specific (standings to
+  // the station owner / structure tax), so a character buying at one station
+  // and selling at another pays two different rates — each station's fees
+  // are matched with that station's own derived rate. A single blended rate
+  // would match neither side. An explicit broker_fee_pct overrides
+  // uniformly (backward compat); stations without enough unambiguous history
+  // fall back to the generic default and are flagged.
+  const globalFeeEntries: BrokerFeeEntry[] = allFeeRows.map((r) => ({
+    journalId: r.id,
+    date: r.date,
+    amount: r.amount ?? 0,
+  }));
+  const globalOrderRecords = allOrderRows.map(toOrderRecord);
+
+  // Station fee models for fee/order matching — CONFIG-FIRST (see
+  // station-fees.ts): ~/.eve-sde/config.json `stationFees` pins each
+  // station's model (percentage or flat ISK — the user's preferred source of
+  // truth); stations not in config derive a percentage from this character's
+  // own unambiguous fee/order history; stations with neither use the generic
+  // default and are flagged for configuration. An explicit broker_fee_pct
+  // param overrides uniformly (legacy simple case).
+  const stationFeeSettings = loadStationFeeSettings();
+  const stationFeeResolution = resolveStationFeeModels(globalFeeEntries, globalOrderRecords, stationFeeSettings);
+  const expectedFeeFor = expectedFeeResolver(stationFeeResolution, brokerFeePct);
+  // The percentage fallback applied to stations with no model of their own
+  // (or the uniform override when one was passed).
+  const brokerFeePctUsed = brokerFeePct ?? DEFAULT_BROKER_FEE_PCT;
+  const stationFeeModels: Record<string, StationFeeModel> = {};
+  for (const m of stationFeeResolution.byStation.values()) stationFeeModels[m.key] = m;
+
+  if (brokerFeePct !== undefined) {
+    flags.push(
+      `broker_fee_pct ${brokerFeePct}% passed explicitly — applied uniformly to every station's fee/order matching. With stations that charge different rates (or flat fees), prefer pinning them in ~/.eve-sde/config.json "stationFees" and omitting this.`
     );
-    if (estimate.estimatedPct !== null) {
-      resolvedBrokerFeePct = estimate.estimatedPct;
+  } else {
+    const summary = [...stationFeeResolution.byStation.values()]
+      .map((m) => {
+        const fee = formatFeeModel(m.model);
+        const src =
+          m.provenance === "config"
+            ? "config"
+            : m.provenance === "derived"
+              ? `derived (${m.sampleCount} pairs)`
+              : `DEFAULT ${DEFAULT_BROKER_FEE_PCT}% — pin in config`;
+        return `${m.key}${m.label ? ` "${m.label}"` : ""}: ${fee} (${src})`;
+      })
+      .join("; ");
+    flags.push(`station fee models for fee/order matching — ${summary}.`);
+    const defaults = [...stationFeeResolution.byStation.values()].filter((m) => m.provenance === "default");
+    if (defaults.length > 0) {
       flags.push(
-        `broker_fee_pct not provided — derived ${estimate.estimatedPct.toFixed(2)}% from ${estimate.sampleCount} unambiguous historical fee/order pairs. Pass broker_fee_pct explicitly if this looks wrong (e.g. standings or skills recently changed).`
-      );
-    } else {
-      resolvedBrokerFeePct = DEFAULT_BROKER_FEE_PCT;
-      flags.push(
-        `broker_fee_pct not provided and not enough unambiguous fee history yet to derive it (have ${estimate.sampleCount} sample(s)) — using generic default ${DEFAULT_BROKER_FEE_PCT}%, which may misclassify new-listing/relist matches. Pass it explicitly for a reliable split, or re-run once more history is synced.`
+        `station(s) ${defaults.map((m) => m.key).join(", ")} have no config entry and no derivable history — their fees are matched against the generic ${DEFAULT_BROKER_FEE_PCT}% default, which misclassifies whenever the real fee differs (flat-fee structures especially). Add them to ~/.eve-sde/config.json "stationFees".`
       );
     }
   }
+
+  // Sales tax: explicit param > config.json salesTaxPct > generic default.
+  const salesTaxPctUsed = salesTaxPct ?? stationFeeSettings.salesTaxPct ?? DEFAULT_SALES_TAX_PCT;
 
   const feeMatch = matchBrokerFees(
     feeEntries,
     candidateOrderRows.map(toOrderRecord),
     priorOrderRows.map(toOrderRecord),
-    resolvedBrokerFeePct
+    expectedFeeFor
   );
   if (feeMatch.unmatchedTotal > 0 && brokerFees > 0 && feeMatch.unmatchedTotal / brokerFees > 0.2) {
     flags.push(
@@ -476,12 +529,11 @@ export async function runDailyClose(
   // its caveats). A lifetime-economics view layered on top of the day-exact
   // fee figures above — deliberately NOT added to realizedPnlNet, which must
   // stay cash-true for the day the fees were paid.
-  const globalOrderRecords = allOrderRows.map(toOrderRecord);
   const globalFeeMatch = matchBrokerFees(
-    allFeeRows.map((r) => ({ journalId: r.id, date: r.date, amount: r.amount ?? 0 })),
+    globalFeeEntries,
     globalOrderRecords,
     [],
-    resolvedBrokerFeePct
+    expectedFeeFor
   );
   const orderFees = new Map(globalFeeMatch.matched.map((m) => [m.orderId, m.amount]));
 
@@ -603,7 +655,7 @@ export async function runDailyClose(
   }));
 
   const typeIds = [...new Set(lots.map((l) => l.typeId))];
-  const { prices: netSellPrices, method: marksMethod } = await fetchMarksForClose(typeIds, date, isToday, salesTaxPct);
+  const { prices: netSellPrices, method: marksMethod } = await fetchMarksForClose(typeIds, date, isToday, salesTaxPctUsed);
   const unrealized = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId));
   unrealizedPnl = unrealized.unrealizedPnl;
   inventoryMarketValue = unrealized.totalMarketValue;
@@ -758,7 +810,9 @@ export async function runDailyClose(
     brokerFeesNewListings: feeMatch.newListingTotal,
     brokerFeesRelisting: feeMatch.relistTotal,
     brokerFeesUnmatched: feeMatch.unmatchedTotal,
-    brokerFeePctUsed: resolvedBrokerFeePct,
+    brokerFeePctUsed: brokerFeePctUsed,
+    salesTaxPctUsed,
+    stationFeeModels,
     realizedPnlNet,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
@@ -789,7 +843,9 @@ export async function runDailyClose(
     brokerFeesNewListings: feeMatch.newListingTotal,
     brokerFeesRelisting: feeMatch.relistTotal,
     brokerFeesUnmatched: feeMatch.unmatchedTotal,
-    brokerFeePctUsed: resolvedBrokerFeePct,
+    brokerFeePctUsed: brokerFeePctUsed,
+    salesTaxPctUsed,
+    stationFeeModels,
     marksMethod,
     exitFeesAttributed,
     exitFeesRelistingAttributed,
@@ -818,6 +874,8 @@ export interface PerPositionCloseReport {
   closeDate: string;
   isToday: boolean;
   brokerFeePctUsed: number;
+  salesTaxPctUsed: number;
+  stationFeeModels: Record<string, StationFeeModel>;
   positions: PositionClose[];
   flags: string[];
 }
@@ -840,9 +898,10 @@ export async function runDailyClosePerPosition(
   characterId: number | undefined,
   closeDate?: string,
   brokerFeePct?: number,
-  salesTaxPct: number = DEFAULT_SALES_TAX_PCT
+  salesTaxPct?: number
 ): Promise<PerPositionCloseReport> {
   const aggregate = await runDailyClose(characterId, closeDate, brokerFeePct, salesTaxPct);
+  const salesTaxPctUsed = salesTaxPct ?? aggregate.salesTaxPctUsed;
   const db = getLedgerDb();
   const { start, end } = dayRange(aggregate.closeDate);
 
@@ -877,7 +936,7 @@ export async function runDailyClosePerPosition(
 
   const candidateOrderRows = db
     .prepare(
-      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id
        FROM orders WHERE character_id = ? AND issued >= ? AND issued < ?`
     )
     .all(aggregate.characterId, start, end) as Array<{
@@ -888,10 +947,11 @@ export async function runDailyClosePerPosition(
     volume_total: number;
     issued: string;
     state: OrderRecord["state"];
+    location_id: number | null;
   }>;
   const priorOrderRows = db
     .prepare(
-      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state
+      `SELECT order_id, type_id, is_buy_order, price, volume_total, issued, state, location_id
        FROM orders WHERE character_id = ? AND state = 'cancelled' AND issued < ?`
     )
     .all(aggregate.characterId, end) as typeof candidateOrderRows;
@@ -904,13 +964,14 @@ export async function runDailyClosePerPosition(
     volumeTotal: r.volume_total,
     issued: r.issued,
     state: r.state,
+    locationId: r.location_id,
   });
 
   const feeMatch = matchBrokerFees(
     feeEntries,
     candidateOrderRows.map(toOrderRecord),
     priorOrderRows.map(toOrderRecord),
-    aggregate.brokerFeePctUsed
+    expectedFeeFromModels(aggregate.stationFeeModels, aggregate.brokerFeePctUsed)
   );
 
   const lotRows = db
@@ -938,7 +999,7 @@ export async function runDailyClosePerPosition(
   // Same ESI calls the aggregate close just made for the same type_ids —
   // effectively free, they hit the response cache (ESI_CACHE_TTL) rather
   // than round-tripping again.
-  const { prices: netSellPrices } = await fetchMarksForClose(typeIds, aggregate.closeDate, aggregate.isToday, salesTaxPct);
+  const { prices: netSellPrices } = await fetchMarksForClose(typeIds, aggregate.closeDate, aggregate.isToday, salesTaxPctUsed);
   const unrealizedByType = computeUnrealized(lots, (typeId) => netSellPrices.get(typeId)).perType;
 
   const positions = buildPositionCloses(
@@ -956,6 +1017,8 @@ export async function runDailyClosePerPosition(
     closeDate: aggregate.closeDate,
     isToday: aggregate.isToday,
     brokerFeePctUsed: aggregate.brokerFeePctUsed,
+    salesTaxPctUsed: aggregate.salesTaxPctUsed,
+    stationFeeModels: aggregate.stationFeeModels,
     positions,
     flags: aggregate.flags,
   };
