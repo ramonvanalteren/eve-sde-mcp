@@ -4,7 +4,7 @@ Trigger: "how is production doing", "review my jobs", or a periodic check before
 
 ## Procedure
 
-1. **`get_industry_jobs`** (include_completed if a batch just delivered) — every job with product, runs, cost (installation, already paid — it's sunk), end date, facility.
+1. **`get_industry_jobs`** (include_completed if a batch just delivered) — every job with product, runs, cost (installation, already paid — it's sunk), end date, facility. This endpoint's cache window isn't independently confirmed (unlike the 300s region-orders figure — see build-margin-verification.md's point-in-time section) — if a job you know just finished still shows as active, that's plausibly cache lag, not a real state problem.
 2. **Per manufacturing job: `price_build` at replacement basis** — the product's CURRENT margin, not the one at commit time. Materials at today's sell orders, product at today's net sell, `installation_cost` = the job's reported cost (it's sunk; include it so unit cost reflects the batch's all-in, but the *verdict* is about the next batch).
 3. **Research jobs** (ME/TE) — see the knowledge reference's research section: value the research against the production volume it will actually serve, not in the abstract.
 

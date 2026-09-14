@@ -8,6 +8,7 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
 - [The jump-range competition check](#the-jump-range-competition-check)
 - [Thin single-unit outliers](#thin-single-unit-outliers)
+- [ESI data is cached — "live" isn't always live](#esi-data-is-cached--live-isnt-always-live)
 - [Fee numbers drift — verify via get_station_fees](#fee-numbers-drift--verify-via-get_station_fees)
 
 ## The two locations and their fees
@@ -53,6 +54,23 @@ Fall back to per-item `get_region_orders(region_id=10000002, type_id=X, location
 ## Thin single-unit outliers
 
 **Watch for thin single-unit outliers skewing `bestSell` or `bestBuy`.** The batch tool takes the literal best price at the given location, which can occasionally be a single-unit, short-duration listing that isn't representative of the durable market (confirmed case: Corpus X-Type Heavy Energy Nosferatu — a 1-unit order dragged the reported margin down to 16% when the real durable price, 7 units on a deep order, gave 33.5%; see `failure-cases.md`). If a margin looks surprisingly off despite decent order counts, spot-check with `get_region_orders` before trusting it.
+
+## ESI data is cached — "live" isn't always live
+
+Confirmed 2026-09 by reading ESI's own HTTP response headers (`Expires` minus `Last-Modified`) directly, cross-checked against CCP's developer forum:
+
+| Tool (backed by ESI) | Cache window | Source |
+|---|---|---|
+| `get_region_orders`, `get_portfolio_margins` (region market orders) | **300s (5 min)** | Confirmed live via ESI headers; matches CCP dev-forum statement ("the Cache timer is 300 seconds") |
+| Structure market orders (`get_structure_orders`) | 300s (5 min) | CCP developer forum |
+| `get_character_orders` (a character's own open orders) | 1200s (20 min) | Community-documented, long-standing |
+| `get_wallet_transactions`, `get_wallet_journal` | 3600s (1 hour) | Community-documented, long-standing |
+| `get_character_blueprints`, `get_character_assets` | 3600s (1 hour) | Community-documented, long-standing |
+| `get_market_history` | Refreshes once daily (~11:05 UTC, after downtime) — not a 5-min window | Confirmed live via ESI headers; matches the daily-close workflow's existing note |
+
+**What this means in practice**: don't treat a tool's output as automatically more current than what the client shows. If a number looks surprising — a sudden margin collapse, a price that contradicts what the user reports seeing — the tool may be serving a cached snapshot, not this second's live state. **A repeated, byte-identical result (same order ID, same timestamp, same volume) across two calls made minutes apart is itself the tell that you're reading a cache, not the live book** — a genuinely active market never returns the exact same snapshot twice. When that happens, trust the user's direct in-client observation over the tool, say so plainly, and don't re-run the same call expecting a different answer within the cache window.
+
+(Confirmed case, recorded in the industry skill's build-margin-verification.md: `get_region_orders` reported a fresh sell order dropping Valkyrie I's price ~20%, turning a verified +13.7% margin negative — two consecutive calls returned the identical order ID and timestamp. The user, physically in Jita, saw no such order. The read was stale; the margin was fine.)
 
 ## Fee numbers drift — verify via get_station_fees
 

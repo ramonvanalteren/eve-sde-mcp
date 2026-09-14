@@ -9,6 +9,7 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [Thin single-unit outlier dragged a margin (Corpus X-Type Nosferatu)](#thin-single-unit-outlier-dragged-a-margin-corpus-x-type-nosferatu)
 - [Stale single-unit bestBuy / missed range-1 competitor (Medium Disintegrator)](#stale-single-unit-bestbuy--missed-range-1-competitor-medium-disintegrator)
 - [Margins collapsed within a single session](#margins-collapsed-within-a-single-session)
+- [Stale cached ESI read mistaken for a real market move (Valkyrie I)](#stale-cached-esi-read-mistaken-for-a-real-market-move-valkyrie-i)
 - [Missing Units column in sizing tables](#missing-units-column-in-sizing-tables)
 - [Pipeline cycles run longer than a week (Shadow Serpentis)](#pipeline-cycles-run-longer-than-a-week-shadow-serpentis)
 - [Skill file reversion and missing scripts](#skill-file-reversion-and-missing-scripts)
@@ -49,6 +50,12 @@ Medium Disintegrator Specialization was recommended off a stale single-unit `bes
 *Rule it motivates: margins are point-in-time — re-verify before execution, not just before recommending (SKILL.md).*
 
 Two candidates verified live at 73.4% and 68.4% margin dropped to 27.4% and 6.0% respectively within the same session, purely from fresh competing orders (a 26% sell-side drop on one, a 35-unit dump crashing the other 37%). Normal market behavior, not a tool error — verified margin is a snapshot, not a guarantee.
+
+## Stale cached ESI read mistaken for a real market move (Valkyrie I)
+
+*Rule it motivates: the ESI cache-window table in margin-verification.md — a repeated, byte-identical result across calls is the tell that you're reading a cache, not the live book.*
+
+`get_region_orders` reported a fresh 25-unit sell order on Valkyrie I dropping the best price ~20% (37,290 → 29,610 ISK), turning a verified +13.7% margin negative. Two consecutive calls, made minutes apart, returned the identical order ID, issue timestamp, and volume — the tell that should have been caught immediately but wasn't until the user, physically standing in the Jita station, reported seeing no such order and a lowest sell still at 37,290. The read was a stale cache (region market orders cache for up to 300s/5min), not a real undercut. Recorded in the industry skill's build-margin-verification.md since that's where it happened, but the mechanism (`get_region_orders`) is shared with this skill's own margin verification — the same failure mode applies here.
 
 ## Missing Units column in sizing tables
 
