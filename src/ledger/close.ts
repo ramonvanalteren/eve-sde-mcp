@@ -2,6 +2,7 @@ import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/es
 import { mapConcurrent } from "../tools/market.js";
 import { getLedgerDb } from "./db.js";
 import { syncWalletLedger } from "./sync.js";
+import { applyPendingBomJobs, productionSummaryForWindow, type ProductionDaySummary } from "./bom-close.js";
 import {
   applyFifo,
   summarizeRealized,
@@ -78,7 +79,7 @@ function previousUtcDay(): string {
  * marked fifo_applied=1 once processed, so re-running is a no-op unless new
  * transactions arrived since the last run.
  */
-function applyPendingFifo(characterId: number): { transactionsApplied: number; consumptions: number } {
+export function applyPendingFifo(characterId: number): { transactionsApplied: number; consumptions: number } {
   const db = getLedgerDb();
 
   const existingLotRows = db
@@ -290,6 +291,8 @@ export interface DailyCloseReport {
   /** Per-station fee models used for fee/order matching (config-first; see station-fees.ts), keyed by station id — "unknown" for orders without a synced location. */
   stationFeeModels: Record<string, StationFeeModel>;
   realizedPnlNet: number;
+  /** Bill-of-materials production this day — delivered jobs, basis created, missing-basis flags. */
+  production: ProductionDaySummary;
   unmatchedSellRevenue: number;
   unmatchedSellQty: number;
   unrealizedPnl: number | null;
@@ -344,6 +347,10 @@ export async function runDailyClose(
 ): Promise<DailyCloseReport> {
   const char = await getActiveCharacter(characterId);
   await syncWalletLedger(char.characterId);
+  // Bill-of-materials pass BEFORE the pending FIFO: delivered manufacturing
+  // jobs consume material lots and create synthetic product lots at all-in
+  // basis, so same-day product sells match a real cost basis (see bom-close).
+  applyPendingBomJobs(char.characterId);
   applyPendingFifo(char.characterId);
 
   const date = closeDate ?? previousUtcDay();
@@ -355,7 +362,7 @@ export async function runDailyClose(
   const consumptionRows = db
     .prepare(
       `SELECT sell_transaction_id, buy_transaction_id, type_id, date, quantity, unit_cost, unit_sell_price, unmatched
-       FROM lot_consumptions WHERE character_id = ? AND date >= ? AND date < ?`
+       FROM lot_consumptions WHERE character_id = ? AND is_production = 0 AND date >= ? AND date < ?`
     )
     .all(char.characterId, start, end) as Array<{
     quantity: number;
@@ -734,6 +741,16 @@ export async function runDailyClose(
     closingNav = closingBalRow.balance + escrowCommitted + inventoryMarketValue;
   }
 
+  // Production (bill-of-materials) section: jobs delivered inside this day's
+  // window — units produced, material cost drawn from FIFO lots, installation,
+  // unit basis. Requires applyPendingBomJobs to have run (it did, above).
+  const production = productionSummaryForWindow(char.characterId, start, end);
+  if (production.jobsDelivered.length > 0 && production.missingBasisUnits > 0) {
+    flags.push(
+      `Production consumed ${production.missingBasisUnits} material units with no buy-lot basis (mined, refined, PI-sourced, or pre-ledger) — product basis understated accordingly.`
+    );
+  }
+
   const prevClose = db
     .prepare(
       `SELECT closing_nav, unrealized_pnl FROM daily_closes WHERE character_id = ? AND close_date < ? ORDER BY close_date DESC LIMIT 1`
@@ -762,14 +779,14 @@ export async function runDailyClose(
       unmatched_sell_revenue, unmatched_sell_qty, unrealized_pnl, inventory_market_value, escrow_committed,
       opening_nav, closing_nav, non_trading_cashflow, escrow_movement,
       broker_fees_new_listings, broker_fees_relisting, broker_fees_unmatched, broker_fee_pct_used, marks_method,
-      reconciliation_gap, flags, computed_at
+      reconciliation_gap, flags, production_json, computed_at
     ) VALUES (
       @characterId, @closeDate, @openingWalletBalance, @closingWalletBalance,
       @realizedRevenue, @realizedCogs, @realizedPnlGross, @salesTaxPaid, @brokerFeesPaid, @realizedPnlNet,
       @unmatchedSellRevenue, @unmatchedSellQty, @unrealizedPnl, @inventoryMarketValue, @escrowCommitted,
       @openingNav, @closingNav, @nonTradingCashflow, @escrowMovement,
       @brokerFeesNewListings, @brokerFeesRelisting, @brokerFeesUnmatched, @brokerFeePctUsed, @marksMethod,
-      @reconciliationGap, @flags, datetime('now')
+      @reconciliationGap, @flags, @productionJson, datetime('now')
     )
     ON CONFLICT(character_id, close_date) DO UPDATE SET
       opening_wallet_balance = excluded.opening_wallet_balance,
@@ -794,6 +811,7 @@ export async function runDailyClose(
       broker_fees_unmatched = excluded.broker_fees_unmatched,
       broker_fee_pct_used = excluded.broker_fee_pct_used,
       marks_method = excluded.marks_method,
+      production_json = excluded.production_json,
       reconciliation_gap = excluded.reconciliation_gap,
       flags = excluded.flags,
       computed_at = datetime('now')`
@@ -814,6 +832,7 @@ export async function runDailyClose(
     salesTaxPctUsed,
     stationFeeModels,
     realizedPnlNet,
+    production,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
     unrealizedPnl,
@@ -826,6 +845,7 @@ export async function runDailyClose(
     reconciliationGap,
     marksMethod,
     flags: JSON.stringify(flags),
+    productionJson: JSON.stringify(production),
   });
 
   return {
@@ -854,6 +874,7 @@ export async function runDailyClose(
     acquisitionFeesRelistingAttributed,
     acquisitionFeesByType,
     realizedPnlNet,
+    production,
     unmatchedSellRevenue: realized.unmatchedRevenue,
     unmatchedSellQty: realized.unmatchedQty,
     unrealizedPnl,
@@ -908,7 +929,7 @@ export async function runDailyClosePerPosition(
   const consumptionRows = db
     .prepare(
       `SELECT type_id, quantity, unit_cost, unit_sell_price, unmatched
-       FROM lot_consumptions WHERE character_id = ? AND date >= ? AND date < ?`
+       FROM lot_consumptions WHERE character_id = ? AND is_production = 0 AND date >= ? AND date < ?`
     )
     .all(aggregate.characterId, start, end) as Array<{
     type_id: number;
