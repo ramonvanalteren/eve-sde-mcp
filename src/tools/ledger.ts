@@ -358,8 +358,12 @@ export function registerLedgerTools(server: McpServer): void {
         const acq = acquisition.perPurchase.get(r.buy_transaction_id);
         const acqPerUnit = acq ? acq.total / Math.max(r.original_qty, 1) : 0;
         const allInUnitCost = r.unit_cost + acqPerUnit;
+        // Synthetic BOM product lots use negative ids (-job_id): all-in unit
+        // basis from consumed material lots + installation, not a market buy.
+        const isProduction = r.buy_transaction_id < 0;
         return {
           buyTransactionId: r.buy_transaction_id,
+          production: isProduction ? { jobId: -r.buy_transaction_id } : undefined,
           typeName: enrichTypeName(sdeDb, r.type_id),
           typeId: r.type_id,
           date: r.date,

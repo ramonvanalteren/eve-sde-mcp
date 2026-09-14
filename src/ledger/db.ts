@@ -14,7 +14,10 @@ function ensureColumn(db: Database.Database, table: string, column: string, defi
 export function getLedgerDb(): Database.Database {
   if (ledgerDb) return ledgerDb;
 
-  const dbPath = path.join(getSdeDir(), "ledger.db");
+  // Test seam: point the singleton at a throwaway file.
+  const dbPath = process.env.EVE_SDE_LEDGER_PATH
+    ? path.resolve(process.env.EVE_SDE_LEDGER_PATH)
+    : path.join(getSdeDir(), "ledger.db");
   ledgerDb = new Database(dbPath);
   ledgerDb.pragma("journal_mode = WAL");
 
@@ -166,6 +169,49 @@ export function getLedgerDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_autoclose_character_date ON autoclose_runs(character_id, close_date);
     CREATE INDEX IF NOT EXISTS idx_autoclose_started ON autoclose_runs(started_at);
+
+    -- Synced industry jobs (see src/ledger/sync.ts). Manufacturing jobs
+    -- (activity 1) that have been DELIVERED get their materials consumed
+    -- from FIFO buy lots and a synthetic product lot at all-in basis
+    -- (src/ledger/bom-close.ts) — bill-of-materials linkage, so product
+    -- sells carry real cost basis instead of booking as zero-basis
+    -- unmatched revenue.
+    CREATE TABLE IF NOT EXISTS industry_jobs (
+      job_id INTEGER PRIMARY KEY,
+      character_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      blueprint_type_id INTEGER NOT NULL,
+      product_type_id INTEGER,
+      runs INTEGER NOT NULL,
+      successful_runs INTEGER,
+      cost REAL,
+      start_date TEXT,
+      end_date TEXT,
+      completed_date TEXT,
+      status TEXT NOT NULL,
+      facility_id INTEGER,
+      bom_applied INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_jobs_bom_pending ON industry_jobs(character_id, activity_id, bom_applied);
+
+    -- Synced character blueprints (ESI /characters/{id}/blueprints/ —
+    -- requires esi-characters.read_blueprints.v1, granted on the next
+    -- login after the scope was added to the default set). The BOM pass
+    -- resolves each delivered job's exact BPO ME from here via the job's
+    -- blueprint item id — config blueprintME (type-keyed) is the fallback.
+    CREATE TABLE IF NOT EXISTS character_blueprints (
+      item_id INTEGER PRIMARY KEY,
+      character_id INTEGER NOT NULL,
+      type_id INTEGER NOT NULL,
+      location_id INTEGER,
+      location_flag TEXT,
+      quantity INTEGER,
+      material_efficiency INTEGER NOT NULL DEFAULT 0,
+      time_efficiency INTEGER NOT NULL DEFAULT 0,
+      runs INTEGER,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_blueprints_character_type ON character_blueprints(character_id, type_id);
   `);
 
   // Migrations for columns added after the table already existed on disk.
@@ -177,6 +223,16 @@ export function getLedgerDb(): Database.Database {
   // How unrealized P&L was marked for this close: live Jita best-sell or
   // The Forge daily-average market history (past dates).
   ensureColumn(ledgerDb, "daily_closes", "marks_method", "TEXT");
+  // Production section of the close (bill-of-materials linkage): JSON
+  // summary of jobs delivered in the day — units produced, material cost,
+  // installation, unit basis, missing-basis flags.
+  ensureColumn(ledgerDb, "daily_closes", "production_json", "TEXT");
+  // BOM material-consumption rows in lot_consumptions: inventory
+  // transformation, not sales — realized-P&L queries exclude them.
+  ensureColumn(ledgerDb, "lot_consumptions", "is_production", "INTEGER NOT NULL DEFAULT 0");
+  // The specific blueprint item a job ran with (ESI job blueprint_id) —
+  // joins to character_blueprints for exact per-BPO ME resolution.
+  ensureColumn(ledgerDb, "industry_jobs", "blueprint_id", "INTEGER");
 
   return ledgerDb;
 }
