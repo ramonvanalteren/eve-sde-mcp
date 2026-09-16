@@ -36,6 +36,7 @@ A verified margin is a snapshot. Production amplifies the staleness problem rela
 - Re-verify immediately before committing runs.
 - If the product's margin moved below threshold between verification and listing, treat the output disposal like the kill case in the production review: sell at whatever net is positive, don't relist the line, re-verify before the next batch.
 - Prefer thick, liquid product books where single orders can't move the price — check `sellOrderCount` in the report and the product's daily volume (get_market_history) when sizing runs.
+- **But "re-verify" can itself lie — ESI data is cached, not always live.** `get_region_orders`/`price_build`'s pricing caches for up to 300s (5 min, confirmed via ESI's own response headers); `get_character_blueprints`/`get_character_assets`/`get_industry_jobs` cache longer (~1hr or unconfirmed — treat as possibly stale). A repeated, byte-identical order (same ID/timestamp) across calls minutes apart means you're reading a cache, not the live book — trust the user's direct in-client observation over the tool when that happens, don't re-run the same call expecting a different answer inside the cache window.
 
 ## The founding audit (reference numbers, 2026-09)
 

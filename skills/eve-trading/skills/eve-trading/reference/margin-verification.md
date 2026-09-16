@@ -8,6 +8,7 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
 - [The jump-range competition check](#the-jump-range-competition-check)
 - [Thin single-unit outliers](#thin-single-unit-outliers)
+- [ESI data is cached — "live" isn't always live](#esi-data-is-cached--live-isnt-always-live)
 - [Fee numbers drift — verify via get_station_fees](#fee-numbers-drift--verify-via-get_station_fees)
 
 ## The two locations and their fees
@@ -53,6 +54,10 @@ Fall back to per-item `get_region_orders(region_id=10000002, type_id=X, location
 ## Thin single-unit outliers
 
 **Watch for thin single-unit outliers skewing `bestSell` or `bestBuy`.** The batch tool takes the literal best price at the given location, which can occasionally be a single-unit, short-duration listing that isn't representative of the durable market (confirmed case: Corpus X-Type Heavy Energy Nosferatu — a 1-unit order dragged the reported margin down to 16% when the real durable price, 7 units on a deep order, gave 33.5%; see `failure-cases.md`). If a margin looks surprisingly off despite decent order counts, spot-check with `get_region_orders` before trusting it.
+
+## ESI data is cached — "live" isn't always live
+
+`get_region_orders`/`get_portfolio_margins` cache for up to 300s (5 min, confirmed via ESI's own response headers) — other ESI-backed tools cache longer (character orders ~20min, wallet/blueprints/assets ~1hr). If a margin looks surprising, don't assume the tool is more current than what the user sees in-client; a repeated, byte-identical order (same ID/timestamp) across calls minutes apart means you're reading a cache, not the live book — trust the user's direct observation over the tool in that case.
 
 ## Fee numbers drift — verify via get_station_fees
 
