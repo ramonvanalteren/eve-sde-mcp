@@ -11,6 +11,7 @@ import { registerAuthTools } from "./tools/auth.js";
 import { registerSkillTools } from "./tools/skills.js";
 import { registerMarketTools } from "./tools/market.js";
 import { registerIndustryEsiTools } from "./tools/industry-esi.js";
+import { registerStructureTools } from "./tools/structures.js";
 import { registerFittingTools } from "./tools/fittings.js";
 import { registerKillmailTools } from "./tools/killmails.js";
 import { registerLedgerTools } from "./tools/ledger.js";
