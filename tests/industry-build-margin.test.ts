@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyMaterialEfficiency,
+  jobMaterialQuantity,
   computeBuildMargin,
   type BuildMarginInput,
   type PriceQuote,
@@ -35,13 +35,42 @@ function istributorInput(overrides: Partial<BuildMarginInput> = {}): BuildMargin
   };
 }
 
-describe("applyMaterialEfficiency", () => {
-  it("reduces quantities by ME% with per-material rounding, floor 1", () => {
-    expect(applyMaterialEfficiency(1786, 0)).toBe(1786);
-    expect(applyMaterialEfficiency(1786, 10)).toBe(1607); // 1786 × 0.9 = 1607.4
-    expect(applyMaterialEfficiency(2, 10)).toBe(2); // 1.8 rounds to 2
-    expect(applyMaterialEfficiency(1, 10)).toBe(1); // floor 1
-    expect(applyMaterialEfficiency(100, 25)).toBe(90); // level clamped to 10 → ×0.9
+describe("jobMaterialQuantity (ME applies per job, not per run)", () => {
+  it("is the base quantity × runs at ME 0", () => {
+    expect(jobMaterialQuantity(1786, 1, 0)).toBe(1786);
+    expect(jobMaterialQuantity(2, 200, 0)).toBe(400);
+  });
+
+  it("rounds up once per job: Small Processor Overclocking Unit I, ME 8, 200 runs, base 2", () => {
+    // ceil(2 × 200 × 0.92) = 368; the old per-run round(1.84) = 2 → 400 was 32 over.
+    // Also guards float noise: 400 × 0.92 = 368.00000000000006 in JS.
+    expect(jobMaterialQuantity(2, 200, 8)).toBe(368);
+  });
+
+  it("can exceed the old per-run figure: Medium Processor Overclocking Unit I, ME 7, 80 runs, base 9", () => {
+    // ceil(9 × 80 × 0.93) = ceil(669.6) = 670; the old per-run round(8.37) = 8 → 640 was 30 short.
+    expect(jobMaterialQuantity(9, 80, 7)).toBe(670);
+  });
+
+  it("floors at one unit per run", () => {
+    expect(jobMaterialQuantity(1, 10, 10)).toBe(10); // ceil(9) = 9 → floor 10
+    expect(jobMaterialQuantity(1, 1, 10)).toBe(1);
+    expect(jobMaterialQuantity(2, 1, 10)).toBe(2); // ceil(1.8)
+    expect(jobMaterialQuantity(1, 200, 5)).toBe(200); // ME does nothing on base 1
+  });
+
+  it("rounds a single run up (ceil, not nearest)", () => {
+    expect(jobMaterialQuantity(1786, 1, 10)).toBe(1608); // 1607.4 → 1608
+    expect(jobMaterialQuantity(100, 1, 1)).toBe(99);
+  });
+
+  it("clamps the ME level to 0-10", () => {
+    expect(jobMaterialQuantity(100, 1, 25)).toBe(90);
+    expect(jobMaterialQuantity(100, 1, -5)).toBe(100);
+  });
+
+  it("returns 0 for a zero-run job", () => {
+    expect(jobMaterialQuantity(9, 0, 7)).toBe(0);
   });
 });
 
@@ -90,6 +119,25 @@ describe("computeBuildMargin (audit fixtures)", () => {
     expect(r.margins.atSellBasis.marginPct!).toBeGreaterThan(0);
     expect(r.margins.atSellBasis.marginPct!).toBeLessThan(3);
     expect(r.margins.atSellBasis.profitTotal!).toBeLessThan(60000); // 400 runs, ~53k — the dead line
+  });
+
+  it("applies ME per job in the report (totalQty, and qtyPerRunAdjusted as its per-run average)", () => {
+    const prices = new Map<number, PriceQuote>([
+      [1, { bestSell: 10, bestBuy: 9, sellOrderCount: 5, buyOrderCount: 5 }],
+      [2, { bestSell: 100, bestBuy: 90, sellOrderCount: 5, buyOrderCount: 5 }],
+    ]);
+    const r = computeBuildMargin({
+      product: { name: "X", typeId: 1, quantityPerRun: 1 },
+      materials: [{ name: "Conductive Polymer", typeId: 2, qtyPerRun: 2 }],
+      runs: 200,
+      meLevel: 8,
+      prices,
+      salesTaxPct: 0,
+      brokerFeePct: 0,
+    });
+    expect(r.materials[0].totalQty).toBe(368);
+    expect(r.materials[0].qtyPerRunAdjusted).toBeCloseTo(1.84, 10);
+    expect(r.materials[0].totalCostAtSell).toBe(368 * 100);
   });
 
   it("ME 10 improves unit cost", () => {

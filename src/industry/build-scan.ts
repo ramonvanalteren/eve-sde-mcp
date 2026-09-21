@@ -7,7 +7,7 @@
 // system-wide, deliberately coarse. A screen hit is a candidate, never a
 // verdict; scan_builds live-verifies its top output before reporting it.
 
-import { applyMaterialEfficiency } from "./build-margin.js";
+import { jobMaterialQuantity } from "./build-margin.js";
 
 export interface ScanBlueprint {
   blueprintTypeId: number;
@@ -62,7 +62,8 @@ export function screenBuilds(input: ScreenInput): ScreenedCandidate[] {
         lineItems.push({ name: m.name, cost: null });
         continue;
       }
-      const qty = applyMaterialEfficiency(m.qtyPerRun, input.meLevel);
+      // Screen is per single run (runs = 1), the most rounding-heavy case.
+      const qty = jobMaterialQuantity(m.qtyPerRun, 1, input.meLevel);
       const cost = qty * price;
       materialCostPerRun += cost;
       lineItems.push({ name: m.name, cost });

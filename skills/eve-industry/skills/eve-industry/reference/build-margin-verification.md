@@ -23,7 +23,7 @@ The rule: **no manufacturing runs are committed on an unverified margin.** This 
 
 ## The ME adjustment (and its honesty note)
 
-Materials scale by ME as `round(qty × (1 − ME%))` per material, floor 1 unit. The in-client formula rounds per material too; the engine's rounding is an approximation that can differ by a unit on small quantities — the report's material table shows the adjusted quantities so the discrepancy is visible if it matters. ME 10 (the T1 practical cap) typically saves ~10% of material cost — meaningful on thin lines, noise on healthy ones; run price_build twice (ME 0 vs ME 10) when deciding whether a research investment is worth it.
+Materials scale by ME per **job**, as EVE does: `max(runs, ceil(base × runs × (1 − ME%)))` per material, so `totalQty` in the report is exact for the run count you pass (`qtyPerRunAdjusted` is just `totalQty / runs`). Structure/facility material bonuses are not modelled (the SDE has no facility data) — a bonused structure will need slightly less than the report shows. ME 10 (the T1 practical cap) typically saves ~10% of material cost — meaningful on thin lines, noise on healthy ones; run price_build twice (ME 0 vs ME 10) when deciding whether a research investment is worth it.
 
 ## Net proceeds
 

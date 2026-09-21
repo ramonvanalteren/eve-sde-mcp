@@ -51,7 +51,9 @@ export interface BuildMarginReport {
     name: string;
     typeId: number;
     qtyPerRunBase: number;
+    /** totalQty / runs — the per-job total averaged per run (may be fractional). */
     qtyPerRunAdjusted: number;
+    /** Units the whole job consumes (ME applied per job, not per run). */
     totalQty: number;
     bestSell: number | null;
     bestBuy: number | null;
@@ -82,11 +84,16 @@ export interface BuildMarginReport {
   warnings: string[];
 }
 
-/** ME-adjusted material quantity. CCP rounds per material, floor 1.
- *  (Approximation of the client's exact rounding — flagged in the report.) */
-export function applyMaterialEfficiency(qtyPerRun: number, meLevel: number): number {
+/** Total units of one material a manufacturing JOB consumes. EVE applies ME
+ *  per job, not per run: max(runs, ceil(round(runs × base × (1 − ME%), 2))) —
+ *  rounded up once over the whole job, with a floor of 1 unit per run. The
+ *  inner round(…, 2) strips float noise (400 × 0.92 = 368.00000000000006 in JS,
+ *  which a bare ceil would push to 369). Structure/facility modifiers, which
+ *  multiply into the same factor in-game, are not modelled (the SDE has none). */
+export function jobMaterialQuantity(qtyPerRun: number, runs: number, meLevel: number): number {
   const factor = 1 - Math.min(Math.max(meLevel, 0), 10) / 100;
-  return Math.max(1, Math.round(qtyPerRun * factor));
+  const raw = Math.round(runs * qtyPerRun * factor * 100) / 100;
+  return Math.max(runs, Math.ceil(raw));
 }
 
 export function computeBuildMargin(input: BuildMarginInput): BuildMarginReport {
@@ -96,8 +103,9 @@ export function computeBuildMargin(input: BuildMarginInput): BuildMarginReport {
 
   const materials = input.materials.map((m) => {
     const quote = input.prices.get(m.typeId);
-    const qtyPerRunAdjusted = applyMaterialEfficiency(m.qtyPerRun, input.meLevel);
-    const totalQty = qtyPerRunAdjusted * input.runs;
+    const totalQty = jobMaterialQuantity(m.qtyPerRun, input.runs, input.meLevel);
+    // Effective per-run average of the per-job total — can be fractional.
+    const qtyPerRunAdjusted = input.runs > 0 ? totalQty / input.runs : m.qtyPerRun;
     const bestSell = quote?.bestSell ?? null;
     const bestBuy = quote?.bestBuy ?? null;
     return {
