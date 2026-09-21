@@ -109,11 +109,28 @@ describe("pure applyJobToLots — the founding audit's numbers", () => {
     expect(applied.consumptions.some((c) => c.unmatched)).toBe(true);
   });
 
-  it("ME reduces consumed quantities", () => {
-    const me0 = buildJobBom([{ typeId: 34, name: "Tritanium", qtyPerRun: 1000 }], 1, 0);
-    const me10 = buildJobBom([{ typeId: 34, name: "Tritanium", qtyPerRun: 1000 }], 1, 10);
-    expect(me10.materials[0].qtyPerRunAdjusted).toBe(900);
-    expect(me0.materials[0].qtyPerRunAdjusted).toBe(1000);
+  it("ME reduces consumed quantities per job, not per run", () => {
+    const consumed = (base: number, runs: number, me: number) => {
+      const bom = buildJobBom([{ typeId: 34, name: "Tritanium", qtyPerRun: base }], 1, me);
+      const applied = applyJobToLots({
+        jobId: 1,
+        productTypeId: 2046,
+        completedDate: "d",
+        runs,
+        bom,
+        installationCost: 0,
+        materialLots: [{ id: 1, typeId: 34, date: "a", remainingQty: 1_000_000, unitCost: 1 }],
+      });
+      return applied.consumptions.reduce((s, c) => s + c.quantity, 0);
+    };
+    expect(consumed(1000, 1, 0)).toBe(1000);
+    expect(consumed(1000, 1, 10)).toBe(900);
+    // Small Processor Overclocking Unit I, ME 8, 200 runs, base 2: ceil(368) — per-run rounding gave 400
+    expect(consumed(2, 200, 8)).toBe(368);
+    // Medium Processor Overclocking Unit I, ME 7, 80 runs, base 9: ceil(669.6) — per-run rounding gave 640
+    expect(consumed(9, 80, 7)).toBe(670);
+    // floor of one unit per run
+    expect(consumed(1, 50, 10)).toBe(50);
   });
 });
 
@@ -174,19 +191,17 @@ describe("ledger integration — applyPendingBomJobs + production section", () =
 
     const result = applyPendingBomJobs(CHAR);
     const job = result.jobs.find((j) => j.jobId === 671999999)!;
-    // ME 10: Mexallon 53 -> 48/run (round(53*0.9)=48), Pyerite 2 -> 2, Tritanium 1062 -> 956
-    const mexPerRun = job.productUnitCost; // just assert the job applied and basis is cheaper than ME 0
     expect(job.productQty).toBe(400);
     const summary = productionSummaryForWindow(CHAR, "2026-09-15T00:00:00.000Z", "2026-09-16T00:00:00.000Z");
     const row = summary.jobsDelivered.find((j) => j.jobId === 671999999)!;
     expect(row.meLevel).toBe(10);
     expect(row.meSource).toBe("esi-blueprints");
-    // ME 10 quantities: Trit 956/run = 382,400 total — FIFO takes the
-    // leftover 75,200 @ 3.95 from the ME-0 job, then 307,200 @ 3.90 from the
-    // new lot; Pyerite 2/run (800 @ 17.96); Mexallon 48/run (19,200 — no lot
-    // left after the ME-0 job, missing basis); install 182,576.
-    // basis = (297,040 + 1,198,080 + 14,368 + 0 + 182,576) / 400 = 4,230.16
-    expect(row.unitBasis).toBeCloseTo(4230.16, 1);
+    // ME 10 quantities are per JOB (400 runs): Trit ceil(1062×400×0.9) = 382,320 —
+    // FIFO takes the leftover 75,200 @ 3.95 from the ME-0 job, then 307,120 @ 3.90
+    // from the new lot; Pyerite 720 @ 17.96; Mexallon 19,080 (no lot left after
+    // the ME-0 job, missing basis); install 182,576.
+    // basis = (297,040 + 1,197,768 + 12,931.2 + 0 + 182,576) / 400 = 4,225.788
+    expect(row.unitBasis).toBeCloseTo(4225.788, 2);
   });
 
   it("falls back to config-pinned ME (type-keyed) when the blueprint item is unsynced", () => {

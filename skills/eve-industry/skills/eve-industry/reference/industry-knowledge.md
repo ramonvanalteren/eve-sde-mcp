@@ -4,7 +4,7 @@ The reference layer the workflows draw on. Honest scope marker throughout: the M
 
 ## Material Efficiency (ME) and Time Efficiency (TE)
 
-- **ME** reduces material quantities per run: each level −1%, T1 BPO cap 10 (~10% less material). Quantities round **per material** (floor 1) — on small quantities the rounding eats the benefit; price_build shows the adjusted quantities so this is visible.
+- **ME** reduces material quantities: each level −1%, T1 BPO cap 10 (~10% less material). It applies **per job, not per run**: `needed = max(runs, ceil(base × runs × (1 − ME%)))`, so a material with base 2/run still saves ~8% over a 200-run job, and every material needs at least 1 unit per run.
 - **TE** reduces job duration: each level −1%, cap 20. TE pays where slots are the constraint (see slot economics in the production review), not where materials dominate cost.
 - Research valuation: **ME pays on volume** (savings × units over the line's life), **TE pays on slot-time** (durations × batches through a constrained slot). A research job costs index-driven installation + the research slot's time — the founding audit flagged a 1.45M ISK TE job on a BPO whose production volume had not been proven large enough to amortize it. Every research job gets the same explicit payback statement a BPO acquisition gets.
 - Copying exists to parallelize (build from copies in multiple facilities) or to feed invention; for a solo T1 operation, originals usually suffice.

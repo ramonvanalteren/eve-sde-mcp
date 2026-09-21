@@ -20,7 +20,7 @@
 // per-BPO ME, so the user pins the real levels; default overstates material
 // use and thus understates production profit.
 
-import { applyMaterialEfficiency } from "./build-margin.js";
+import { jobMaterialQuantity } from "./build-margin.js";
 
 export interface BomMaterial {
   typeId: number;
@@ -30,20 +30,20 @@ export interface BomMaterial {
 }
 
 export interface JobBom {
-  /** ME-adjusted quantity per run per material. */
-  materials: Array<{ typeId: number; name: string; qtyPerRunAdjusted: number }>;
+  /** Base quantity per run per material; ME is applied per JOB in applyJobToLots. */
+  materials: Array<{ typeId: number; name: string; qtyPerRun: number }>;
+  /** Blueprint ME level 0-10 the job ran with. */
+  meLevel: number;
   /** Total units produced per run (industryActivityProducts.quantity). */
   productQtyPerRun: number;
 }
 
-/** ME-adjust a blueprint's manufacturing materials. */
+/** Bundle a blueprint's manufacturing materials with the ME the job ran at.
+ *  ME rounds per job, so quantities resolve once the run count is known. */
 export function buildJobBom(materials: BomMaterial[], productQtyPerRun: number, meLevel: number): JobBom {
   return {
-    materials: materials.map((m) => ({
-      typeId: m.typeId,
-      name: m.name,
-      qtyPerRunAdjusted: applyMaterialEfficiency(m.qtyPerRun, meLevel),
-    })),
+    materials: materials.map((m) => ({ typeId: m.typeId, name: m.name, qtyPerRun: m.qtyPerRun })),
+    meLevel,
     productQtyPerRun,
   };
 }
@@ -105,7 +105,7 @@ export function applyJobToLots(input: {
   let materialsCostMatched = 0;
 
   for (const m of input.bom.materials) {
-    let remaining = m.qtyPerRunAdjusted * input.runs;
+    let remaining = jobMaterialQuantity(m.qtyPerRun, input.runs, input.bom.meLevel);
     if (remaining <= 0) continue;
 
     for (const lot of lots) {
