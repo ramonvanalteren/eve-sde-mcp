@@ -9,6 +9,9 @@
 // not wired in is silently invisible to clients (get_structure shipped that
 // way once), hence the test.
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerTypeTools } from "./tools/types.js";
 import { registerGroupTools } from "./tools/groups.js";
@@ -24,10 +27,20 @@ import { registerFittingTools } from "./tools/fittings.js";
 import { registerKillmailTools } from "./tools/killmails.js";
 import { registerLedgerTools } from "./tools/ledger.js";
 
+// package.json is the single source of truth for the server's version — see
+// README "Versioning". Read at call time rather than hardcoded so bumping
+// package.json is the only edit needed; it can't drift out of sync with what
+// the server actually reports (dist/server.js and src/server.ts both sit one
+// directory below package.json, in the repo and in the deployed install).
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const packageVersion: string = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf8")
+).version;
+
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "eve-sde",
-    version: "1.0.0",
+    version: packageVersion,
   });
 
   registerTypeTools(server);

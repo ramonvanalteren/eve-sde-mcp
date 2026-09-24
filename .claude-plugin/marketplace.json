@@ -8,37 +8,18 @@
     {
       "name": "eve-trading",
       "source": "./skills/eve-trading",
-      "description": "Hybrid station trading skill: buy orders at a low-fee Perimeter structure (range 1 into Jita 4-4), sell orders at Jita 4-4. New position selection from saved A4E tier URLs, buy/sell portfolio review, inventory risk, pipeline performance, and daily close against the eve-sde-mcp ledger.",
+      "description": "EVE Online player-capital skill bundle: hybrid station trading (Perimeter buy / Jita 4-4 sell — new position selection, portfolio review, inventory risk, daily close), industry (price_build build-margin verification, production review, BPO candidate selection, ME/TE knowledge), and ship fitting (SDE-verified hull data, hull-bonus-driven design, role-coherent tank/range). One install for all three.",
       "keywords": [
         "eve-online",
         "station-trading",
         "market",
         "jita",
-        "perimeter"
-      ]
-    },
-    {
-      "name": "eve-fitting",
-      "source": "./skills/eve-fitting",
-      "description": "EVE Online ship fitting best practices: SDE-verified hull data before any fit, hull-bonus-driven design, role-coherent tank/range, skill-aware fitting math. Works with the eve-sde-mcp SDE/ESI tools.",
-      "keywords": [
-        "eve-online",
-        "fitting",
-        "ships",
-        "sde",
-        "pvp"
-      ]
-    },
-    {
-      "name": "eve-industry",
-      "source": "./skills/eve-industry",
-      "description": "EVE Online industry skill: build-margin verification before committing runs (price_build), production review of active jobs, new BPO candidate selection, ME/TE/facility/index/invention knowledge. Works with the eve-sde-mcp SDE/ESI tools.",
-      "keywords": [
-        "eve-online",
+        "perimeter",
         "industry",
         "manufacturing",
         "blueprints",
-        "production"
+        "fitting",
+        "ships"
       ]
     }
   ]

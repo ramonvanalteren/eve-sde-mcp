@@ -1,7 +1,7 @@
 {
   "name": "eve-trading",
-  "description": "Hybrid station trading skill: buy orders at a low-fee Perimeter structure (range 1 into Jita 4-4), sell orders at Jita 4-4. Covers new position selection from saved A4E tier URLs, buy/sell portfolio review, inventory risk, pipeline performance, and daily close against the eve-sde-mcp ledger. Not for repricing/undercut checks.",
-  "version": "1.0.0",
+  "description": "EVE Online player-capital skill bundle: hybrid station trading (buy orders at a low-fee Perimeter structure, sell orders at Jita 4-4 — new position selection, portfolio review, inventory risk, daily close), industry (price_build build-margin verification, production review, BPO candidate selection, ME/TE knowledge), and ship fitting (SDE-verified hull data, hull-bonus-driven design, role-coherent tank/range). Three independently-triggered skills — eve-trading, eve-industry, eve-fitting — sharing one plugin so a single install covers all of it. Use with the eve-sde-mcp SDE/ESI tools.",
+  "version": "1.1.0",
   "author": {
     "name": "Ramon van Alteren"
   },
