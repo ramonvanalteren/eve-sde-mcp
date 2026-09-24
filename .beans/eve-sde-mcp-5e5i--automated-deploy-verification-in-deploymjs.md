@@ -1,14 +1,14 @@
 ---
 # eve-sde-mcp-5e5i
 title: Automated deploy verification in deploy.mjs
-status: todo
+status: in-progress
 type: task
 priority: high
 tags:
     - reliability
     - deploy
 created_at: 2026-09-24T16:49:16Z
-updated_at: 2026-09-24T16:49:16Z
+updated_at: 2026-09-24T21:32:19Z
 parent: eve-sde-mcp-vex4
 blocked_by:
     - eve-sde-mcp-3kcy

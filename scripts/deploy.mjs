@@ -23,19 +23,38 @@
 //   4. npm ci --omit=dev inside the install dir — production deps only,
 //      native binding built for the pinned runtime
 //   5. verifies the binding loads there
-//   6. writes start.sh (resolved Node path baked in, with fallback discovery
+//   6. verifies the INSTALLED server's tool surface and version — boots it
+//      for real over an in-memory MCP connection and checks it exposes
+//      everything dist/tools/*.js can register, and reports package.json's
+//      version. Independent of createServer() itself (see eve-sde-mcp-5e5i):
+//      a tool defined but never wired in — exactly what happened to
+//      get_structure (PR #16) — would still pass a naive smoke test, since
+//      createServer() is the thing that omitted the call. This instead
+//      rediscovers the expected tool set from dist/tools/*.js directly, the
+//      same way tests/server-tools.test.ts does against src/.
+//   7. writes start.sh (resolved Node path baked in, with fallback discovery
 //      and a loud-fail binding check — never an auto-rebuild)
-//   7. updates the Claude Desktop config to launch the install (with a
+//   8. updates the Claude Desktop config to launch the install (with a
 //      timestamped backup; pass --no-config to skip)
 //
 // Re-run any time — it's a full clean redeploy. Restart Claude Desktop
 // afterwards to pick up the new server.
 
 import { execSync } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoDir = join(__dirname, "..");
@@ -117,7 +136,87 @@ try {
 }
 process.stdout.write("Native binding verified in the install dir.\n");
 
-// --- 6. Launcher ------------------------------------------------------------
+// --- 6. Verify the installed server's tool surface and version -------------
+// "Expected" comes from dist/tools/*.js (just built, mirrors src/tools/*.ts
+// 1:1) — every register*Tools export, discovered independently of
+// createServer(). "Actual" comes from booting the INSTALLED server for real
+// and listing its tools over a genuine MCP connection. A tool module that
+// exists but was never wired into createServer() fails here, the same way
+// it fails tests/server-tools.test.ts — this just re-checks it against the
+// artifact that's actually about to be launched, not the dev tree.
+process.stdout.write("Verifying the installed server's tool surface...\n");
+try {
+  const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+
+  async function listToolNames(server) {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "deploy-verify", version: "0.0.0" });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const { tools } = await client.listTools();
+      return { names: tools.map((t) => t.name), version: client.getServerVersion()?.version };
+    } finally {
+      await client.close();
+    }
+  }
+
+  // Expected: every register*Tools export in the just-built dist/tools/*.js.
+  const toolsDir = join(distSrc, "tools");
+  const registrars = [];
+  for (const file of readdirSync(toolsDir).filter((f) => f.endsWith(".js"))) {
+    const mod = await import(pathToFileURL(join(toolsDir, file)).href);
+    for (const [name, fn] of Object.entries(mod)) {
+      if (/^register[A-Z]/.test(name) && typeof fn === "function") {
+        registrars.push({ name, file: `tools/${file}`, register: fn });
+      }
+    }
+  }
+  if (registrars.length === 0) {
+    fail("discovered zero register*Tools exports in dist/tools/*.js — the check itself is broken, not the server");
+  }
+
+  // Actual: the real installed server, booted fresh.
+  const { createServer } = await import(pathToFileURL(join(installDir, "dist", "server.js")).href);
+  const { names: exposedNames, version: reportedVersion } = await listToolNames(createServer());
+  const exposed = new Set(exposedNames);
+
+  const missingByModule = [];
+  for (const { name, file, register } of registrars) {
+    const solo = new McpServer({ name: "solo", version: "0.0.0" });
+    register(solo);
+    const { names: provided } = await listToolNames(solo);
+    const missing = provided.filter((t) => !exposed.has(t));
+    if (missing.length > 0) missingByModule.push(`  ${name} (${file}): ${missing.join(", ")}`);
+  }
+  if (missingByModule.length > 0) {
+    fail(
+      `the installed server does not expose every tool its own source can register:\n${missingByModule.join("\n")}\n` +
+        `Check that createServer() in src/server.ts calls every register*Tools function.`
+    );
+  }
+
+  const installedPackageVersion = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")).version;
+  if (reportedVersion !== installedPackageVersion) {
+    fail(
+      `the installed server reports version "${reportedVersion}" but its own package.json says "${installedPackageVersion}".\n` +
+        `src/server.ts should read package.json directly (see README "Versioning") — this should be impossible; report it.`
+    );
+  }
+
+  process.stdout.write(
+    `Tool surface verified: ${exposed.size} tools exposed, matching all ${registrars.length} tool modules; ` +
+      `version ${reportedVersion}.\n`
+  );
+} catch (err) {
+  // fail() above exits directly (never throws), so only a genuinely
+  // unexpected crash (an import failing, the in-memory connection breaking)
+  // reaches here.
+  fail(`tool-surface verification crashed: ${err instanceof Error ? err.stack : err}`);
+}
+
+// --- 7. Launcher ------------------------------------------------------------
 // Resolved Node path baked in at deploy time; falls back to discovery
 // (fnm's pinned-version dirs first — same order as the repo's start.sh) if
 // that binary disappears (e.g. fnm upgrade). Never rebuilds: on a mismatch
@@ -164,7 +263,7 @@ writeFileSync(join(installDir, "start.sh"), launcher, { mode: 0o755 });
 chmodSync(join(installDir, "start.sh"), 0o755); // writeFileSync alone won't fix the mode of an existing file
 process.stdout.write("Launcher written (start.sh).\n");
 
-// --- 7. Claude Desktop config ----------------------------------------------
+// --- 8. Claude Desktop config ----------------------------------------------
 const snippet = `{
   "mcpServers": {
     "eve-sde": {

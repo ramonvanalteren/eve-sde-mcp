@@ -1,14 +1,14 @@
 ---
 # eve-sde-mcp-3kcy
 title: CI via GitHub Actions
-status: in-progress
+status: completed
 type: task
 priority: high
 tags:
     - ci
     - reliability
 created_at: 2026-09-24T16:48:50Z
-updated_at: 2026-09-24T16:50:49Z
+updated_at: 2026-09-24T21:32:19Z
 parent: eve-sde-mcp-vex4
 ---
 
