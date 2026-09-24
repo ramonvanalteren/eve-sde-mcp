@@ -78,6 +78,26 @@ jobs:
           gunzip -c /tmp/sde.db.gz > ~/.eve-sde/eve.db
           rm /tmp/sde.db.gz
 
+      # database.test.ts's getMetadata() check needs ~/.eve-sde/metadata.json
+      # (same shape downloader.ts's downloadSde() writes). Not part of the
+      # cached path — regenerated every run, cache hit or miss, so it can't
+      # go stale/missing on a cache-hit run the way a download-step-only
+      # write would.
+      - name: Write SDE metadata
+        run: |
+          node -e '
+            const fs = require("fs");
+            const os = require("os");
+            const path = require("path");
+            const dbPath = path.join(os.homedir(), ".eve-sde", "eve.db");
+            const metadataPath = path.join(os.homedir(), ".eve-sde", "metadata.json");
+            fs.writeFileSync(metadataPath, JSON.stringify({
+              downloadedAt: new Date().toISOString(),
+              sourceUrl: "https://www.fuzzwork.co.uk/dump/latest-sqlite.db.gz",
+              fileSize: fs.statSync(dbPath).size,
+            }, null, 2));
+          '
+
       # tsc (no separate --noEmit needed) — type-checks and proves dist/
       # actually builds, which deploy.mjs depends on.
       - name: Build
