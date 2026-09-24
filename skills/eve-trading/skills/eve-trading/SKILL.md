@@ -61,7 +61,7 @@ A margin verified live can still be wrecked within hours by a single large order
 
 - Verified margin is a snapshot, not a guarantee. Say so plainly when presenting candidates, especially ones with thinner books (under ~25 buy+sell orders combined) where a single order can move the market a lot.
 - If the user reports a margin looks wrong after having already acted on a recommendation, re-verify live immediately rather than defending the earlier snapshot — the earlier number was correct *at the time*, but markets move.
-- When re-verification shows a margin has dropped below threshold for its tier, treat it exactly like a Kill/reconsider case in Workflow 2, even if the position was only just opened.
+- **Before the order is placed**, hold it to the *entry* floor for its tier ([margin-verification.md](reference/margin-verification.md) — "Margin thresholds"); if re-verification shows it's dropped below that, the recommendation is stale — don't place it as sized. **Once the order is actually open**, it's a held position and the flat 10% hold floor applies going forward, not the (possibly higher) entry floor it was opened under — a freshly-opened T2 or T3 position that dips just under its entry bar but still clears 10% is a Hold, not an automatic Kill. Only Kill an open position when it drops below the flat 10% floor.
 
 ## Notes
 

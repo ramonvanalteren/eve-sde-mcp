@@ -5,10 +5,10 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 ## Contents
 - [The two locations and their fees](#the-two-locations-and-their-fees)
 - [Fee & margin math](#fee--margin-math)
+- [Margin thresholds](#margin-thresholds)
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
 - [The jump-range competition check](#the-jump-range-competition-check)
 - [Thin single-unit outliers](#thin-single-unit-outliers)
-- [ESI data is cached — "live" isn't always live](#esi-data-is-cached--live-isnt-always-live)
 - [Fee numbers drift — verify via get_station_fees](#fee-numbers-drift--verify-via-get_station_fees)
 
 ## The two locations and their fees
@@ -29,10 +29,18 @@ nm(buy, sell) = (sell×(1−0.015−0.034) − buy×(1+0.005)) / (buy×(1+0.005)
 ```
 Fee profile: buy-side broker fee 0.5% (Perimeter HQ), sell-side broker fee 1.5% (Jita 4-4), sales tax 3.4% (Jita 4-4, sell-side only).
 
-Margin thresholds (unchanged from before the move — these were calibrated against the old 6.4% total friction, so they're probably slightly conservative now that it's ~5.4%, but haven't been explicitly revisited; don't loosen them unilaterally, ask the user first):
-- T1, sub-3 day supply: ≥12.5%
-- T2, sub-4 day supply: ≥13%
-- T3: ≥15%
+## Margin thresholds
+
+As of **2026-09-23**, entry and hold use two different floors — they answer different questions and shouldn't be conflated. This is a deliberate, user-directed change from the prior flat-per-tier scheme (T1 ≥12.5% / T2 ≥13% / T3 ≥15%, used since the 2026-09-12 Perimeter move); don't loosen either floor further without asking first.
+
+**Opening a new position (Workflow 1)** — tiered, and *not* in the same order the prices suggest. T3 carries the largest capital per unit, the thinnest order books, and the highest volatility of the three tiers (mutaplasmid/filament swings, single-order phantom spikes — see `failure-cases.md`), so by default it gets the *highest* bar, not the lowest:
+- **T1: ≥10%**
+- **T2: ≥11%**
+- **T3: ≥13%**, or **≥10% if the candidate clears a liquidity bar**: ≥50 trades/day *and* a combined buy+sell order count that clears the thin-book depth check below (roughly 25+ combined). This carve-out exists so a genuinely liquid T3 item (e.g. a high-volume filament trading 150+/day) isn't held to the full 13% just because of its price tier — while a thin T3 item still needs 13% regardless of how good its headline margin looks. Don't grant the carve-out on trade count alone; a busy-looking average over a volatile week isn't the same as a durably deep book, so check the actual order counts before applying it.
+
+**Holding an existing position (Workflow 2 Kill/Hold, and the point-in-time re-verification rule in SKILL.md)** — one flat floor regardless of tier: **≥10%**. Once capital is already committed there's no broker-fee cost to simply continuing to hold it, unlike the opportunity cost of choosing to commit fresh capital to one candidate over another — so the bar for staying in is lower than the bar for getting in. A held position at or above 10% clears the Kill/Hold margin check, whatever tier it's in.
+- **This is a floor, not a sufficient Hold signal by itself.** A position sitting above 10% but not actually converting (thin fill velocity, capital parked idle) still gets flagged through Workflow 5's capital-efficiency lens — that check is separate from and additional to this one. Margin says the trade is profitable; it says nothing about whether the capital is well used right now.
+- **Corollary for a position re-verified right after opening** (SKILL.md's point-in-time rule): before the order is placed, hold it to the *entry* floor for its tier — a recommendation that's dropped below entry-floor before execution is stale, don't place it as sized. Once the order is actually open, it's a held position and the flat 10% hold floor applies going forward, not the (possibly higher) entry floor it was opened under. A freshly-opened T2 or T3 position that dips just under its entry bar but still clears 10% is a Hold, not an automatic Kill.
 
 ## The mandatory two-call ESI verification procedure
 
@@ -55,9 +63,7 @@ Fall back to per-item `get_region_orders(region_id=10000002, type_id=X, location
 
 **Watch for thin single-unit outliers skewing `bestSell` or `bestBuy`.** The batch tool takes the literal best price at the given location, which can occasionally be a single-unit, short-duration listing that isn't representative of the durable market (confirmed case: Corpus X-Type Heavy Energy Nosferatu — a 1-unit order dragged the reported margin down to 16% when the real durable price, 7 units on a deep order, gave 33.5%; see `failure-cases.md`). If a margin looks surprisingly off despite decent order counts, spot-check with `get_region_orders` before trusting it.
 
-## ESI data is cached — "live" isn't always live
-
-`get_region_orders`/`get_portfolio_margins` cache for up to 300s (5 min, confirmed via ESI's own response headers) — other ESI-backed tools cache longer (character orders ~20min, wallet/blueprints/assets ~1hr). If a margin looks surprising, don't assume the tool is more current than what the user sees in-client; a repeated, byte-identical order (same ID/timestamp) across calls minutes apart means you're reading a cache, not the live book — trust the user's direct observation over the tool in that case.
+**This applies just as hard to a sudden margin collapse driving a Kill as to a suspiciously good margin.** A single mis-priced order crashes a margin exactly as easily as it inflates one — a fast, dramatic swing (a healthy double-digit margin cratering to near-zero or negative within an hour) is itself the trigger to spot-check, not just an unusually attractive number. Specifically watch for the sell price landing suspiciously close to the buy price, or to "buy price + a trivial increment" — that's the signature of someone submitting an order at the client's pre-filled default ("+1 over the current best opposing order") without adjusting it first, not genuine competitive repricing. Confirmed case: 75mm Prototype Gauss Gun — a margin verified at +43% collapsed to -5.4% within the hour on exactly this pattern (bestBuy 656,200 / bestSell 656,300), was reported as a Kill without a spot-check, and had fully recovered to +43.8% the next time it was checked once the stray order was gone. See `failure-cases.md`.
 
 ## Fee numbers drift — verify via get_station_fees
 

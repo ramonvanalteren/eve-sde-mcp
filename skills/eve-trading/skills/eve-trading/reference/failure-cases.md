@@ -12,6 +12,10 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [Missing Units column in sizing tables](#missing-units-column-in-sizing-tables)
 - [Pipeline cycles run longer than a week (Shadow Serpentis)](#pipeline-cycles-run-longer-than-a-week-shadow-serpentis)
 - [Skill file reversion and missing scripts](#skill-file-reversion-and-missing-scripts)
+- [Accidental default-price order crashed a margin (75mm Prototype Gauss Gun)](#accidental-default-price-order-crashed-a-margin-75mm-prototype-gauss-gun)
+- [`issued` timestamp mistaken for position age (Coreli A-Type Thermal Coating)](#issued-timestamp-mistaken-for-position-age-coreli-a-type-thermal-coating)
+- [Increase recommended without checking existing order capacity (Graviton Physics, Mechanical Engineering)](#increase-recommended-without-checking-existing-order-capacity-graviton-physics-mechanical-engineering)
+- [Weekly seasonality not accounted for in fill-velocity reads](#weekly-seasonality-not-accounted-for-in-fill-velocity-reads)
 
 ## Sell-only items reported as buy-side verdicts (twice)
 
@@ -67,3 +71,27 @@ The Shadow Serpentis Explosive Armor Hardener experiment took well over a week e
 *Rule it motivates: the version canary in SKILL.md.*
 
 This file has previously reverted to an earlier saved version between sessions (content frozen at initial-creation timestamp despite many later in-session edits), and the `scripts/` subfolder has separately gone missing at least once even when SKILL.md itself was intact. The skill is now version-controlled in the eve-sde-mcp repository — if anything looks truncated or stale, restore from git history rather than silently working from a broken copy.
+
+## Accidental default-price order crashed a margin (75mm Prototype Gauss Gun)
+
+*Rule it motivates: a sudden margin collapse gets the same spot-check as a suspiciously high one (margin-verification.md, "Thin single-unit outliers").*
+
+A position verified at +43% collapsed to -5.4% within about an hour (bestBuy 656,200 / bestSell 656,300 — sell landing one tick over the opposing best) and was reported as a Kill without a spot-check, on the assumption the market had genuinely moved against it. The real cause: a single order submitted at the EVE client's pre-filled default price ("+1 over the current best opposing order") without being adjusted — a misclick, not competition. `get_region_orders` at the time would have shown it as a lone order sitting right at that signature price; by the next check it was gone and the position had recovered to +43.8%. A dramatic, fast swing is itself grounds for a spot-check — "surprising" isn't only "surprisingly good."
+
+## Increase recommended without checking existing order capacity (Graviton Physics, Mechanical Engineering)
+
+*Rule it motivates: check the existing order's remaining volume against its real fill velocity before recommending Increase (Workflow 2, Increase bullet) — a strong track record is necessary but not sufficient.*
+
+Both items were recommended as Increase candidates on the strength of a long, proven fill history and healthy margin. Neither check considered that the *currently open* order already had most of its volume unfilled: Mechanical Engineering sat at 13/15 (87%) with a ~1.1-2.3 units/day pace (6-12 days of queued runway); Graviton Physics sat at 24/30 (80%) with a lumpy, unpredictable pace including a 13-day zero-fill stretch. In both cases the existing order already had ample capacity to keep converting — a second order would have parked fresh escrow behind capital that hadn't converted yet, with no capital-efficiency benefit. "This item converts well over time" answers whether to hold a position at all, not whether the specific open order needs more capital today.
+
+## Weekly seasonality not accounted for in fill-velocity reads
+
+*Rule it motivates: note the day(s) of week a fill-velocity or zero-fill read spans, and don't generalize a single weekday's window (Workflow 2, weekly seasonality note).*
+
+A 13-day zero-fill gap on Graviton Physics (Sun 08-23 → Fri 09-04) was read as evidence real demand had dried up, and a same-day velocity estimate used to judge order runway was taken from a Tuesday. Neither accounted for EVE Online's confirmed weekly concurrency cycle — peak player population lands every week on Sunday around 1900 UTC, with weekends running substantially above weekdays (source: Imperium News Network login-number reporting, citing CCP-visible PCU data; https://imperium.news/eve-waiting-look-login-numbers/). The gap in question started and ended near weekends, and the fill bursts in the same item's history clustered on Saturdays/Sundays — suggestive of the same pattern, though this skill has no confirmed data quantifying how strongly the population cycle actually moves Jita/Perimeter trade volume specifically. Until that's measured, treat it as a real but unquantified confound on any read taken from a short or single-weekday window, not as a correction factor to apply numerically.
+
+## `issued` timestamp mistaken for position age (Coreli A-Type Thermal Coating)
+
+*Rule it motivates: don't use the current order's `issued` timestamp as position age — corroborate with `get_wallet_transactions` (Workflow 2's Kill note; Workflow 5, "Order age").*
+
+26 of 30 open buy orders showed an `issued` timestamp from the same day, and this was reported as "almost the entire buy book is the aftermath of today's capital deployment." Wrong: Coreli A-Type Thermal Coating alone had wallet fills back to 2026-08-15 (48 transactions) and three prior *cancelled* orders in `get_order_history` (07-31, 09-04, 09-11) — a month-old, continuously-converting position that had simply been repriced that day, like several others in the same batch. `issued` resets on every relist because EVE's order modification cancels and recreates the order (new `order_id`, fresh timestamp) rather than editing price in place — it cannot distinguish "opened five minutes ago" from "open for a month, repriced five minutes ago" without checking fill history first.
