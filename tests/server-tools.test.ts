@@ -69,6 +69,21 @@ describe("server tool surface", () => {
     expect(exposed.has("get_structure")).toBe(true);
   });
 
+  it("reports package.json's version, not a hardcoded literal (see README Versioning)", async () => {
+    const pkgVersion = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8")
+    ).version;
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "server-tools-test", version: "0.0.0" });
+    await Promise.all([client.connect(clientTransport), createServer().connect(serverTransport)]);
+    try {
+      expect(client.getServerVersion()?.version).toBe(pkgVersion);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("the stdio entry point serves createServer() and registers nothing on the side", () => {
     // index.ts can't be imported (it connects stdio and starts the heartbeat),
     // so pin its wiring: tools must come only from the tested createServer().

@@ -2,7 +2,7 @@
 
 MCP server providing access to Eve Online's Static Data Export (SDE) and live character data via the ESI API — ship stats, module attributes, universe data, industry blueprints, character skills, and more.
 
-Companion skills ship in [`skills/`](skills/) as installable plugin packages (also listed in the `eve-sde` marketplace at [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)): **eve-trading** (hybrid station trading workflows), **eve-fitting** (fitting discipline), **eve-industry** (build-margin verification via price_build, production review, BPO candidate selection).
+A companion skill bundle ships in [`skills/eve-trading/`](skills/eve-trading/) as one installable plugin package (also listed in the `eve-sde` marketplace at [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)), covering three independently-triggered skills: **eve-trading** (hybrid station trading workflows), **eve-fitting** (fitting discipline), **eve-industry** (build-margin verification via price_build, production review, BPO candidate selection). Installing the `eve-trading` plugin gets you all three.
 
 Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLite conversion of CCP's SDE. Live data uses EVE SSO OAuth with PKCE (no client secret needed).
 
@@ -227,6 +227,21 @@ npm run deploy       # (Re)install the server to ~/.eve-sde/server
 ```
 
 `start.sh` and `bootstrap.mjs` (dev-tree launchers) check that the native binding loads under the resolved runtime and exit with instructions on mismatch — they never rebuild automatically. If the binding breaks after a Node switch, run `fnm use` (to the `.node-version` pin) and `npm run rebuild`.
+
+## Versioning
+
+Two things carry a semver version, each bumped **in the same commit/PR that changes it** — not on a schedule, not batched up later:
+
+- **The MCP server** — `package.json` `"version"`. This is the single source of truth: `src/server.ts` reads it at construction (`createServer()`), so the version the client sees (`get_sde_status`, MCP `initialize`) can't drift from `package.json` by forgetting a second edit.
+- **The `eve-trading` skill plugin** — `skills/eve-trading/.claude-plugin/plugin.json` `"version"`. It bundles three independently-triggered skills (eve-trading, eve-fitting, eve-industry); a change to any one of them bumps this one version, since they ship together as a single install.
+
+Bump rule for both, by the nature of the change:
+
+- **PATCH** — bug fix, formula/rounding correction, doc/reference wording fix, no behavior or interface change a caller/reader needs to know about.
+- **MINOR** — new tool, new skill workflow, new optional parameter, materially expanded guidance — additive, backward compatible.
+- **MAJOR** — a tool's parameters/output shape change incompatibly, a tool is removed, or a skill's guidance changes in a way that contradicts what it said before (e.g. a formula correction that flips a number callers already depend on — judgment call between PATCH and MAJOR: PATCH if the old behavior was simply wrong and nothing sane depended on the bug, MAJOR if something plausibly did).
+
+If a PR touches both `src/` and `skills/eve-trading/`, bump both independently against their own history — they are not tied together.
 
 ## Data
 

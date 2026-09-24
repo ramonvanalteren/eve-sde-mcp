@@ -1,6 +1,6 @@
 {
   "name": "eve-sde-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server providing access to Eve Online's Static Data Export (SDE)",
   "main": "dist/index.js",
   "type": "module",

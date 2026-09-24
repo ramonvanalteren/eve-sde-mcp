@@ -1,9 +1,0 @@
-{
-  "name": "eve-fitting",
-  "description": "EVE Online ship fitting best practices: verify hull data from the SDE before any fit (slots, hardpoints, drones, bonuses, CPU/PG/calibration), fit around hull bonuses, role-coherent tank and range, and validated module names. Use with the eve-sde-mcp SDE/ESI tools for lookups, EFT validation, and saving fits in-game.",
-  "version": "1.0.0",
-  "author": {
-    "name": "Ramon van Alteren"
-  },
-  "repository": "https://github.com/ramonvanalteren/eve-sde-mcp"
-}
