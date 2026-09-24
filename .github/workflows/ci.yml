@@ -29,8 +29,24 @@ jobs:
       # Also exercises postinstall.mjs's better-sqlite3 binding check on a
       # clean machine — a real check nothing but a developer's own laptop
       # currently runs.
+      #
+      # npm has a known, unresolved bug ("Exit handler never called!", still
+      # open on npm/cli) that intermittently kills `npm ci` — reproduced
+      # twice here, ~72s in each time, npm's own error message says it's an
+      # npm bug, not a dependency-tree problem. --foreground-scripts streams
+      # lifecycle-script output live instead of buffering it (so a real
+      # failure is actually visible in the log), and a few retries work
+      # around the underlying bug, which is npm's to fix, not this repo's.
       - name: Install dependencies
-        run: npm ci
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci --foreground-scripts; then
+              exit 0
+            fi
+            echo "npm ci failed (attempt ${attempt}/3) — retrying..." >&2
+            sleep 10
+          done
+          exit 1
 
       # 11 of the test files (database.test.ts, universe.test.ts, market.test.ts,
       # etc. — anything importing getDatabase()) need the real SDE SQLite
