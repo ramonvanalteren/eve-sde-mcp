@@ -1,5 +1,7 @@
 # eve-sde-mcp
 
+[![CI](https://github.com/ramonvanalteren/eve-sde-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ramonvanalteren/eve-sde-mcp/actions/workflows/ci.yml)
+
 MCP server providing access to Eve Online's Static Data Export (SDE) and live character data via the ESI API — ship stats, module attributes, universe data, industry blueprints, character skills, and more.
 
 A companion skill bundle ships in [`skills/eve-trading/`](skills/eve-trading/) as one installable plugin package (also listed in the `eve-sde` marketplace at [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json)), covering three independently-triggered skills: **eve-trading** (hybrid station trading workflows), **eve-fitting** (fitting discipline), **eve-industry** (build-margin verification via price_build, production review, BPO candidate selection). Installing the `eve-trading` plugin gets you all three.

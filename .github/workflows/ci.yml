@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same pin the repo already enforces locally: start.sh, bootstrap.mjs,
+      # and deploy.mjs all refuse to run under a Node that doesn't match
+      # .node-version rather than silently rebuilding for it.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+
+      # Also exercises postinstall.mjs's better-sqlite3 binding check on a
+      # clean machine — a real check nothing but a developer's own laptop
+      # currently runs.
+      - name: Install dependencies
+        run: npm ci
+
+      # 11 of the test files (database.test.ts, universe.test.ts, market.test.ts,
+      # etc. — anything importing getDatabase()) need the real SDE SQLite
+      # database at ~/.eve-sde/eve.db; there's no fixture/mock. Cache it keyed
+      # on Fuzzwork's Last-Modified header so a run only re-downloads when the
+      # upstream dump actually changes.
+      - name: Resolve SDE cache key
+        id: sde
+        run: |
+          last_modified=$(curl -sSI https://www.fuzzwork.co.uk/dump/latest-sqlite.db.gz \
+            | grep -i '^last-modified:' \
+            | sed -E 's/^[Ll]ast-[Mm]odified: *//' \
+            | tr -d '\r' \
+            | tr -cd '[:alnum:]')
+          echo "key=sde-v1-${last_modified}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SDE database
+        id: sde-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.eve-sde/eve.db
+          key: ${{ steps.sde.outputs.key }}
+
+      - name: Download SDE database
+        if: steps.sde-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.eve-sde
+          curl -sSL https://www.fuzzwork.co.uk/dump/latest-sqlite.db.gz -o /tmp/sde.db.gz
+          gunzip -c /tmp/sde.db.gz > ~/.eve-sde/eve.db
+          rm /tmp/sde.db.gz
+
+      # tsc (no separate --noEmit needed) — type-checks and proves dist/
+      # actually builds, which deploy.mjs depends on.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
