@@ -19,7 +19,8 @@
 //   2. checks the invoking runtime matches .node-version (the server runs
 //      the pinned version; deploy refuses to build for a different one)
 //   3. wipes ~/.eve-sde/server/{dist,node_modules} and copies dist/,
-//      package.json, package-lock.json, .node-version
+//      package.json, package-lock.json, .node-version, plus a
+//      dist/build-info.json (git commit + build time) for get_server_status
 //   4. npm ci --omit=dev inside the install dir — production deps only,
 //      native binding built for the pinned runtime
 //   5. verifies the binding loads there
@@ -109,6 +110,23 @@ cpSync(join(repoDir, "scripts"), join(installDir, "scripts"), { recursive: true 
 for (const f of ["package.json", "package-lock.json", ".node-version"]) {
   copyFileSync(join(repoDir, f), join(installDir, f));
 }
+
+// Build provenance for get_server_status (src/build-info.ts) — optional by
+// design: a git failure here doesn't fail the deploy, it just means
+// get_server_status reports build: null, same as any install that predates
+// this file or a dev run that never goes through deploy.mjs at all.
+try {
+  const gitCommit = execSync("git rev-parse HEAD", { cwd: repoDir, stdio: ["ignore", "pipe", "ignore"] })
+    .toString()
+    .trim();
+  writeFileSync(
+    join(installDir, "dist", "build-info.json"),
+    JSON.stringify({ gitCommit, builtAt: new Date().toISOString() }, null, 2)
+  );
+} catch {
+  process.stderr.write("WARNING: could not resolve git commit — get_server_status will report build: null.\n");
+}
+
 process.stdout.write(`Installed tree ready at ${installDir}\n`);
 
 // --- 4. Production dependencies -------------------------------------------
