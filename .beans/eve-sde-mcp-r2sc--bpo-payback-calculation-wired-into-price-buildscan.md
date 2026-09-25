@@ -1,13 +1,13 @@
 ---
 # eve-sde-mcp-r2sc
 title: BPO payback calculation wired into price_build/scan_builds
-status: todo
+status: in-progress
 type: feature
 priority: normal
 tags:
     - industry
 created_at: 2026-09-24T16:49:16Z
-updated_at: 2026-09-24T16:49:16Z
+updated_at: 2026-09-25T08:09:25Z
 parent: eve-sde-mcp-vex4
 ---
 

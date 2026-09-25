@@ -7,6 +7,7 @@ import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./m
 import { resolveLocations, type ResolvedLocation } from "./structures.js";
 import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
+import { computeBpoPayback, type BpoPaybackReport } from "../industry/bpo-payback.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -337,7 +338,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
   server.tool(
     "price_build",
-    "Price a manufacturing job BEFORE committing runs: blueprint materials (ME-adjusted) at live market prices vs the product's sell price, net of sales tax and broker fee — the industry counterpart of margin verification. Reports unit build cost and margin on both acquisition bases (materials at sell orders = instant, at buy orders = patient), the full material table, book depths, and warnings for thin books or missing orders. Born from the 2026-09 audit where a 400-run Damage Control I job was committed at +0.9% margin. Point-in-time: re-verify before executing. Installation cost is optional (pass the in-client install number for exact figures).",
+    "Price a manufacturing job BEFORE committing runs: blueprint materials (ME-adjusted) at live market prices vs the product's sell price, net of sales tax and broker fee — the industry counterpart of margin verification. Reports unit build cost and margin on both acquisition bases (materials at sell orders = instant, at buy orders = patient), the full material table, book depths, and warnings for thin books or missing orders. Born from the 2026-09 audit where a 400-run Damage Control I job was committed at +0.9% margin. Point-in-time: re-verify before executing. Installation cost is optional (pass the in-client install number for exact figures). Pass bpo_cost when evaluating a BPO acquisition to get first-batch ROI and payback-batch-count computed for you (bpoPayback in the report) instead of doing that arithmetic by hand — see the eve-industry skill's BPO amortization guidance for the formula and its 1-2 batch payback ceiling.",
     {
       blueprint_type_id: z.number().optional().describe("Blueprint typeID (from search_blueprints or get_fittings-style lookups)"),
       product_name: z.string().optional().describe("Product name — resolves the manufacturing blueprint that makes it (alternative to blueprint_type_id)"),
@@ -348,8 +349,9 @@ export function registerIndustryEsiTools(server: McpServer): void {
       sales_tax_pct: z.number().default(3.6).describe("Sales tax percentage on the product sale (default 3.6%)"),
       broker_fee_pct: z.number().default(1.0).describe("Broker fee percentage on the product listing (default 1%)"),
       installation_cost: z.number().optional().describe("Total installation cost for all runs, as shown by the in-client install dialog — folded into unit cost"),
+      bpo_cost: z.number().optional().describe("BPO purchase price, if you're evaluating buying it — computes first-batch ROI and payback-batch-count on total capital deployed (materials + installation + BPO), not gross profit vs. BPO price"),
     },
-    async ({ blueprint_type_id, product_name, runs, me_level, region_id, location_id, sales_tax_pct, broker_fee_pct, installation_cost }) => {
+    async ({ blueprint_type_id, product_name, runs, me_level, region_id, location_id, sales_tax_pct, broker_fee_pct, installation_cost, bpo_cost }) => {
       const db = getDatabase();
 
       // Resolve the blueprint: explicit typeID, or the manufacturing blueprint for a product name
@@ -434,12 +436,32 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
       const report = computeBuildMargin(input);
 
+      // BPO payback (see eve-industry skill's workflow-new-candidates.md
+      // "BPO amortization"): only computable on the sell basis price_build
+      // itself verdicts on, and only when that basis is actually populated
+      // — a material with no sell orders leaves materialsAtSell/profitTotal
+      // null, and guessing a payback number from an incomplete report would
+      // be worse than not reporting one.
+      let bpoPayback: BpoPaybackReport | null = null;
+      if (bpo_cost != null) {
+        const batchProfit = report.margins.atSellBasis.profitTotal;
+        const materialsCost = report.costs.materialsAtSell;
+        if (batchProfit !== null && materialsCost !== null) {
+          bpoPayback = computeBpoPayback(batchProfit, materialsCost, report.costs.installation, bpo_cost);
+        } else {
+          report.warnings.push(
+            "bpo_cost was given but the sell-basis report is incomplete (missing material sell orders) — BPO payback needs a complete report and was skipped rather than guessed."
+          );
+        }
+      }
+
       return jsonResult({
         blueprint: { name: bpName, typeId: bpTypeId },
         product: { name: productRow.productName, typeId: productRow.productTypeID, quantityPerRun: productRow.quantity },
         pricingLocation: { regionId: region_id, locationId: location_id },
         fees: { salesTaxPct: sales_tax_pct, brokerFeePct: broker_fee_pct },
         ...report,
+        bpoPayback,
         note: "Margins are point-in-time snapshots. The sell basis (materials at sell orders) is the conservative one; re-verify before committing runs.",
       });
     }
