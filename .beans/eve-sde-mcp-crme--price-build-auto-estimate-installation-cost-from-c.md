@@ -1,14 +1,14 @@
 ---
 # eve-sde-mcp-crme
 title: 'price_build: auto-estimate installation cost from cost indices'
-status: in-progress
+status: completed
 type: feature
 priority: high
 tags:
     - industry
     - price_build
 created_at: 2026-09-24T16:49:16Z
-updated_at: 2026-09-25T08:01:46Z
+updated_at: 2026-09-25T22:29:55Z
 parent: eve-sde-mcp-vex4
 ---
 
