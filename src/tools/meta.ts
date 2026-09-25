@@ -3,6 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase, getMetadata, sdeExists, listTables, reopenDatabase } from "../database.js";
 import { downloadSde } from "../downloader.js";
 import { jsonResult } from "../utils.js";
+import { packageVersion } from "../version.js";
+import { getBuildInfo } from "../build-info.js";
 
 export function registerMetaTools(server: McpServer): void {
   server.tool(
@@ -76,6 +78,23 @@ export function registerMetaTools(server: McpServer): void {
       const tables = listTables();
       const result = { installed: true, metadata, tableCount: tables.length, tables };
       return jsonResult(result);
+    }
+  );
+
+  server.tool(
+    "get_server_status",
+    "Get the running MCP server's own version, process info, and (when deployed via npm run deploy) the git commit it was built from — confirms a redeploy actually reached the client you're talking to, without cross-referencing a tool result by hand. Distinct from get_sde_status, which is about the SDE data, not the server process.",
+    {},
+    async () => {
+      const buildInfo = getBuildInfo();
+      return jsonResult({
+        version: packageVersion,
+        pid: process.pid,
+        nodeVersion: process.version,
+        uptimeSeconds: Math.round(process.uptime()),
+        startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        build: buildInfo,
+      });
     }
   );
 

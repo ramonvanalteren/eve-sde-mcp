@@ -1,13 +1,13 @@
 ---
 # eve-sde-mcp-f6o1
 title: Server self-reports version/status
-status: todo
+status: in-progress
 type: task
 priority: normal
 tags:
     - observability
 created_at: 2026-09-24T16:49:16Z
-updated_at: 2026-09-24T16:49:16Z
+updated_at: 2026-09-25T08:05:27Z
 parent: eve-sde-mcp-vex4
 ---
 
