@@ -9,7 +9,7 @@ The rule: **no manufacturing runs are committed on an unverified margin.** This 
 - `blueprint_type_id` or `product_name` (the manufacturing blueprint that makes it — the tool resolves it)
 - `runs` — the batch being considered
 - `me_level` — the BPO's actual ME (0 if unresearched); materials scale by (1 − ME/10... per level ×1%)
-- `installation_cost` — the total the in-client install dialog shows, if known
+- `installation_cost` — the total the in-client install dialog shows, if known; omit it to get a live cost-index estimate instead (see `installationEstimate` in the report)
 - `region_id` / `location_id` — where materials are bought and the product is sold (default: The Forge / Jita 4-4)
 - `sales_tax_pct` / `broker_fee_pct` — your real rates (default 3.6 / 1.0; override with the character's actuals, e.g. 3.4 / 1.49 with max skills and station standing)
 
@@ -19,7 +19,7 @@ The rule: **no manufacturing runs are committed on an unverified margin.** This 
 - **`margins.atSellBasis`** — profit per unit, total, and % against that cost. A candidate must clear the threshold here.
 - **`margins.atBuyBasis`** — the same against materials priced at their best BUY orders (acquisition via your own patient buy orders, the standard sourcing pattern for a trading operation). This is the realistic upside, not the basis for the verdict — buy orders don't fill instantly and can be undercut.
 - **`materials[]`** — per-material quantities (ME-adjusted), prices, and order counts. Scan for a single material dominating the cost (the founding audit: one PI component was 68% of a rig line's cost — input-price risk concentrates there).
-- **`warnings[]`** — missing orders, thin product books, install-cost absence. Each is load-bearing: a missing material sell order makes the sell-basis cost understated; a thin book (≤5-6 sell orders) means your volume will undercut deeply.
+- **`warnings[]`** — missing orders, thin product books, and (when installation cost was estimated rather than provided) the estimate's own breakdown. Each is load-bearing: a missing material sell order makes the sell-basis cost understated; a thin book (≤5-6 sell orders) means your volume will undercut deeply; an estimated install cost ignores structure rig bonuses.
 
 ## The ME adjustment (and its honesty note)
 

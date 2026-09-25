@@ -7,6 +7,7 @@ import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./m
 import { resolveLocations, type ResolvedLocation } from "./structures.js";
 import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
+import { estimateInstallationCost, type InstallationCostEstimate } from "../industry/installation-cost.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -85,6 +86,56 @@ async function fetchQuotesForTypes(
     }
   );
   return quotes;
+}
+
+/**
+ * Estimate a manufacturing job's installation cost from live cost indices,
+ * for price_build's default when the caller doesn't pass the real in-client
+ * number. Returns null on any missing piece (unresolvable location, no cost
+ * index for the system) rather than guessing — the caller falls back to
+ * today's "materials-only" behavior in that case, never worse than before
+ * this existed.
+ */
+async function estimateInstallationCostForBuild(
+  materials: Array<{ typeId: number; qtyPerRun: number }>,
+  runs: number,
+  locationId: number
+): Promise<InstallationCostEstimate | null> {
+  try {
+    const [priceRows, costIndexRows, locations] = await Promise.all([
+      esiGet<Array<{ type_id: number; adjusted_price?: number }>>("/markets/prices/", {
+        public: true,
+        cacheTtlMs: 60 * 60 * 1000,
+      }),
+      esiGet<EsiCostIndex[]>("/industry/systems/", { public: true, cacheTtlMs: COST_INDEX_CACHE_TTL }),
+      resolveLocations(undefined, [locationId]),
+    ]);
+
+    const location = locations.get(String(locationId));
+    if (!location?.solarSystemId) return null; // can't price installation without knowing the system
+
+    const systemEntry = costIndexRows.find((c) => c.solar_system_id === location.solarSystemId);
+    const manufacturingIndex = systemEntry?.cost_indices.find((c) => c.activity === "manufacturing")?.cost_index;
+    if (manufacturingIndex === undefined) return null;
+
+    const adjustedPriceByType = new Map<number, number>();
+    for (const r of priceRows) {
+      if (typeof r.adjusted_price === "number") adjustedPriceByType.set(r.type_id, r.adjusted_price);
+    }
+
+    const eivMaterials = materials.map((m) => ({
+      qtyPerRun: m.qtyPerRun,
+      adjustedPrice: adjustedPriceByType.get(m.typeId) ?? null,
+    }));
+
+    return estimateInstallationCost(eivMaterials, runs, manufacturingIndex, location.source === "sde-station");
+  } catch (err) {
+    // Optional enrichment — never sinks the primary price_build result.
+    process.stderr.write(
+      `[price_build] installation-cost estimate failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return null;
+  }
 }
 
 export function registerIndustryEsiTools(server: McpServer): void {
@@ -337,7 +388,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
   server.tool(
     "price_build",
-    "Price a manufacturing job BEFORE committing runs: blueprint materials (ME-adjusted) at live market prices vs the product's sell price, net of sales tax and broker fee — the industry counterpart of margin verification. Reports unit build cost and margin on both acquisition bases (materials at sell orders = instant, at buy orders = patient), the full material table, book depths, and warnings for thin books or missing orders. Born from the 2026-09 audit where a 400-run Damage Control I job was committed at +0.9% margin. Point-in-time: re-verify before executing. Installation cost is optional (pass the in-client install number for exact figures).",
+    "Price a manufacturing job BEFORE committing runs: blueprint materials (ME-adjusted) at live market prices vs the product's sell price, net of sales tax and broker fee — the industry counterpart of margin verification. Reports unit build cost and margin on both acquisition bases (materials at sell orders = instant, at buy orders = patient), the full material table, book depths, and warnings for thin books or missing orders. Born from the 2026-09 audit where a 400-run Damage Control I job was committed at +0.9% margin. Point-in-time: re-verify before executing. Installation cost defaults to an ESTIMATE from live system cost indices (EIV × (cost index + SCC surcharge + NPC facility tax) — see installationEstimate in the report for the breakdown) when omitted; pass the in-client install number for the exact figure instead — structure rig bonuses aren't modelled, so a bonused structure will actually cost less than the estimate.",
     {
       blueprint_type_id: z.number().optional().describe("Blueprint typeID (from search_blueprints or get_fittings-style lookups)"),
       product_name: z.string().optional().describe("Product name — resolves the manufacturing blueprint that makes it (alternative to blueprint_type_id)"),
@@ -347,7 +398,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
       location_id: z.number().default(JITA_TRADE_HUB).describe("Station/structure to price materials and product at (default 60003760 = Jita 4-4)"),
       sales_tax_pct: z.number().default(3.6).describe("Sales tax percentage on the product sale (default 3.6%)"),
       broker_fee_pct: z.number().default(1.0).describe("Broker fee percentage on the product listing (default 1%)"),
-      installation_cost: z.number().optional().describe("Total installation cost for all runs, as shown by the in-client install dialog — folded into unit cost"),
+      installation_cost: z.number().optional().describe("Total installation cost for all runs, as shown by the in-client install dialog — folded into unit cost. Omit to use a live cost-index estimate instead of materials-only margins."),
     },
     async ({ blueprint_type_id, product_name, runs, me_level, region_id, location_id, sales_tax_pct, broker_fee_pct, installation_cost }) => {
       const db = getDatabase();
@@ -416,10 +467,20 @@ export function registerIndustryEsiTools(server: McpServer): void {
         return { content: [{ type: "text", text: `"${bpName}" has no manufacturing activity in the SDE — is it a blueprint?` }] };
       }
 
-      // Live quotes for product + all materials, concurrently
+      // Live quotes for product + all materials, and (when installation_cost
+      // wasn't given) a cost-index-based installation estimate — concurrently.
       const typeIds = [productRow.productTypeID, ...materialRows.map((m) => m.materialTypeID)];
       const uniqueTypeIds = [...new Set(typeIds)];
-      const quotes = await fetchQuotesForTypes(uniqueTypeIds, region_id, location_id);
+      const [quotes, installationEstimate] = await Promise.all([
+        fetchQuotesForTypes(uniqueTypeIds, region_id, location_id),
+        installation_cost == null
+          ? estimateInstallationCostForBuild(
+              materialRows.map((m) => ({ typeId: m.materialTypeID, qtyPerRun: m.quantity })),
+              runs,
+              location_id
+            )
+          : Promise.resolve(null),
+      ]);
 
       const input: BuildMarginInput = {
         product: { name: productRow.productName, typeId: productRow.productTypeID, quantityPerRun: productRow.quantity },
@@ -429,16 +490,42 @@ export function registerIndustryEsiTools(server: McpServer): void {
         prices: quotes,
         salesTaxPct: sales_tax_pct,
         brokerFeePct: broker_fee_pct,
-        installationCostTotal: installation_cost ?? null,
+        // installation_cost always wins when given; otherwise the estimate
+        // (if one could be computed) stands in — computeBuildMargin's own
+        // "materials-only" warning fires automatically when both are null.
+        installationCostTotal: installation_cost ?? installationEstimate?.totalCost ?? null,
       };
 
       const report = computeBuildMargin(input);
+      if (installation_cost == null && installationEstimate) {
+        report.warnings.push(
+          `Installation cost is an ESTIMATE, not the in-client number: EIV ${Math.round(installationEstimate.eiv).toLocaleString()} ISK × ` +
+            `(system cost index ${(installationEstimate.systemCostIndex * 100).toFixed(2)}% + ${installationEstimate.sccSurchargePct}% SCC surcharge` +
+            (installationEstimate.facilityTaxPct > 0 ? ` + ${installationEstimate.facilityTaxPct}% NPC facility tax` : "") +
+            `) = ${Math.round(installationEstimate.totalCost).toLocaleString()} ISK. Structure rig bonuses aren't modelled (a bonused structure costs less than this); pass the in-client install number for the exact figure.` +
+            (installationEstimate.missingAdjustedPriceCount > 0
+              ? ` ${installationEstimate.missingAdjustedPriceCount} material(s) had no adjusted_price available — EIV, and so this estimate, is understated.`
+              : "")
+        );
+      }
 
       return jsonResult({
         blueprint: { name: bpName, typeId: bpTypeId },
         product: { name: productRow.productName, typeId: productRow.productTypeID, quantityPerRun: productRow.quantity },
         pricingLocation: { regionId: region_id, locationId: location_id },
         fees: { salesTaxPct: sales_tax_pct, brokerFeePct: broker_fee_pct },
+        installationSource: installation_cost != null ? "provided" : installationEstimate ? "estimated" : "none",
+        installationEstimate:
+          installation_cost == null && installationEstimate
+            ? {
+                eiv: installationEstimate.eiv,
+                systemCostIndex: installationEstimate.systemCostIndex,
+                facilityTaxPct: installationEstimate.facilityTaxPct,
+                sccSurchargePct: installationEstimate.sccSurchargePct,
+                totalCost: installationEstimate.totalCost,
+                missingAdjustedPriceCount: installationEstimate.missingAdjustedPriceCount,
+              }
+            : null,
         ...report,
         note: "Margins are point-in-time snapshots. The sell basis (materials at sell orders) is the conservative one; re-verify before committing runs.",
       });
