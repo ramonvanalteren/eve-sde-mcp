@@ -25,6 +25,16 @@ const DEFAULT_SCOPES = [
   "esi-fittings.read_fittings.v1",
   "esi-fittings.write_fittings.v1",
   "esi-killmails.read_killmails.v1",
+  // Corp management, Tier 1 (src/tools/corporation.ts) — added 2026-09-26.
+  // All require the authenticated character to hold the corresponding corp
+  // role (Accountant/Director/Factory_Manager per endpoint); a character
+  // without that role gets a clear "missing scope/role" message, not a crash.
+  "esi-wallet.read_corporation_wallets.v1",
+  "esi-assets.read_corporation_assets.v1",
+  "esi-corporations.read_blueprints.v1",
+  "esi-industry.read_corporation_jobs.v1",
+  "esi-contracts.read_corporation_contracts.v1",
+  "esi-corporations.read_divisions.v1",
 ];
 
 export interface OAuthTokens {

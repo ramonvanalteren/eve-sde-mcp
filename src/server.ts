@@ -24,6 +24,7 @@ import { registerStructureTools } from "./tools/structures.js";
 import { registerFittingTools } from "./tools/fittings.js";
 import { registerKillmailTools } from "./tools/killmails.js";
 import { registerLedgerTools } from "./tools/ledger.js";
+import { registerCorporationTools } from "./tools/corporation.js";
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -44,6 +45,7 @@ export function createServer(): McpServer {
   registerFittingTools(server);
   registerKillmailTools(server);
   registerLedgerTools(server);
+  registerCorporationTools(server);
 
   return server;
 }

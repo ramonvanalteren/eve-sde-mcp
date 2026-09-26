@@ -11,7 +11,7 @@ import { computeBpoPayback, type BpoPaybackReport } from "../industry/bpo-paybac
 import { estimateInstallationCost, type InstallationCostEstimate } from "../industry/installation-cost.js";
 import { searchContracts, type PublicContract } from "../contracts.js";
 
-interface EsiIndustryJob {
+export interface EsiIndustryJob {
   job_id: number;
   installer_id: number;
   facility_id: number;
@@ -44,7 +44,7 @@ interface EsiCostIndex {
   }>;
 }
 
-const ACTIVITY_NAMES: Record<number, string> = {
+export const ACTIVITY_NAMES: Record<number, string> = {
   1: "Manufacturing",
   3: "TE Research",
   4: "ME Research",
