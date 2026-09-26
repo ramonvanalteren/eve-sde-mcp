@@ -9,6 +9,7 @@ import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../i
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
 import { computeBpoPayback, type BpoPaybackReport } from "../industry/bpo-payback.js";
 import { estimateInstallationCost, type InstallationCostEstimate } from "../industry/installation-cost.js";
+import { searchContracts, type PublicContract } from "../contracts.js";
 
 interface EsiIndustryJob {
   job_id: number;
@@ -749,6 +750,73 @@ export function registerIndustryEsiTools(server: McpServer): void {
       if (status) contracts = contracts.filter((c) => c.status === status);
 
       return jsonResult({ characterName: char.characterName, contractCount: contracts.length, contracts });
+    }
+  );
+
+  server.tool(
+    "search_public_contracts",
+    "Search PUBLIC contracts in a region (courier, item exchange, auction) — anyone's, not just the authenticated character's (that's get_character_contracts). Use this to price a courier contract against real comparable listings before posting one, or to browse public item/auction listings. Region-wide: The Forge (Jita) alone is ~34k contracts, so filter by type/location/reward/volume — unfiltered calls still return every contract's summary but only the top `limit` by reward+price. Cached 30 minutes (ESI's own cache window for this endpoint).",
+    {
+      region_id: z.number().default(10000002).describe("Region to search (default 10000002 = The Forge/Jita)"),
+      type: z.enum(["courier", "item_exchange", "auction"]).optional().describe("Filter by contract type"),
+      start_location_id: z.number().optional().describe("Filter to contracts starting at this station/structure (e.g. 60003760 = Jita 4-4)"),
+      end_location_id: z.number().optional().describe("Filter to contracts ending at this station/structure — the two together find an exact route, e.g. Perimeter -> Jita"),
+      min_reward: z.number().optional().describe("Minimum reward (courier) or price (item_exchange/auction) in ISK"),
+      max_reward: z.number().optional().describe("Maximum reward (courier) or price (item_exchange/auction) in ISK"),
+      min_volume: z.number().optional().describe("Minimum cargo volume in m3"),
+      max_volume: z.number().optional().describe("Maximum cargo volume in m3"),
+      limit: z.number().default(20).describe("Max contracts to return, sorted by reward+price descending (default 20, max 100)"),
+    },
+    async ({ region_id, type, start_location_id, end_location_id, min_reward, max_reward, min_volume, max_volume, limit }) => {
+      const contracts = await esiGetAll<PublicContract>(`/contracts/public/${region_id}/`, {
+        public: true,
+        cacheTtlMs: 30 * 60 * 1000,
+      });
+
+      const { matchingCount, contracts: matched } = searchContracts(contracts, {
+        type,
+        startLocationId: start_location_id,
+        endLocationId: end_location_id,
+        minReward: min_reward,
+        maxReward: max_reward,
+        minVolume: min_volume,
+        maxVolume: max_volume,
+        limit,
+      });
+
+      // Resolve start/end location names for just the returned rows — never
+      // for the full unfiltered region (could be tens of thousands).
+      const locationIds = [...new Set(matched.flatMap((c) => [c.start_location_id, c.end_location_id]))];
+      const locations = await resolveLocations(undefined, locationIds);
+      const nameOf = (id: number): { locationId: number; name: string | null; systemName: string | null } => {
+        const loc = locations.get(String(id));
+        return { locationId: id, name: loc?.name ?? null, systemName: loc?.systemName ?? null };
+      };
+
+      return jsonResult({
+        regionId: region_id,
+        totalRegionContracts: contracts.length,
+        matchingCount,
+        returned: matched.length,
+        contracts: matched.map((c) => ({
+          contractId: c.contract_id,
+          type: c.type,
+          title: c.title,
+          reward: c.reward,
+          price: c.price,
+          buyout: c.buyout ?? null,
+          collateral: c.collateral,
+          volume: c.volume,
+          daysToComplete: c.days_to_complete,
+          startLocation: nameOf(c.start_location_id),
+          endLocation: nameOf(c.end_location_id),
+          dateIssued: c.date_issued,
+          dateExpired: c.date_expired,
+          issuerId: c.issuer_id,
+          issuerCorporationId: c.issuer_corporation_id,
+        })),
+        note: "Public data, no auth needed. Location names resolve NPC stations from the SDE and player structures via the active character's ESI docking access (esi-universe.read_structures.v1) — unresolvable ones show null, never guessed.",
+      });
     }
   );
 }
