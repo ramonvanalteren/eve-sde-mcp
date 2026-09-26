@@ -1,14 +1,14 @@
 ---
 # eve-sde-mcp-34dg
 title: 'search_public_contracts: region-wide public contract search'
-status: in-progress
+status: completed
 type: feature
 priority: high
 tags:
     - contracts
     - market
 created_at: 2026-09-26T07:55:40Z
-updated_at: 2026-09-26T07:55:40Z
+updated_at: 2026-09-26T11:16:07Z
 parent: eve-sde-mcp-vex4
 ---
 
