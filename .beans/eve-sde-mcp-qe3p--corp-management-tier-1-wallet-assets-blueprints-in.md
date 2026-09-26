@@ -1,14 +1,14 @@
 ---
 # eve-sde-mcp-qe3p
 title: 'Corp management Tier 1: wallet, assets, blueprints, industry jobs, contracts'
-status: in-progress
+status: completed
 type: feature
 priority: high
 tags:
     - corp
     - esi
 created_at: 2026-09-26T11:43:51Z
-updated_at: 2026-09-26T11:43:51Z
+updated_at: 2026-09-26T17:03:53Z
 parent: eve-sde-mcp-vex4
 ---
 
