@@ -6,7 +6,7 @@ Takes a list of candidates (kills, increases, or new positions) plus the
 available capital and a buffer target, ranks them by **absolute profit**
 (not margin %), and prints the table in the skill's required format:
 Item | Unit price | Units | Cost | Margin | Trades/day | Total profit |
-Yield/day | Running.
+Yield (M/1M/day) | Running.
 
 This exists because the same sizing/running-total/buffer-check logic has
 been hand-rewritten inline many times across trading sessions — pulling it
@@ -62,22 +62,28 @@ this script stops adding rows once the target is hit and reports what was
 left out — it does not silently shrink unit counts to make things fit.
 Trim candidates yourself and re-run if the leftovers matter.
 
-**Yield/day is a velocity-adjusted capital-efficiency score, not margin
-restated.** Plain profit ÷ capital invested is almost the same number as
-margin % (margin's denominator just adds the buy-side broker fee) — it
-tells you nothing margin doesn't already say. Yield/day instead folds in
-how often the trade can realistically repeat: `(profit_per_unit /
-unit_price) * trades_per_day * 100`, expressed as a percent. It is
-deliberately scale-independent (the same value regardless of how many
-units you size) because it's meant to rank *opportunities* before a size
-is chosen, not to restate the sized position's profit. A high-margin item
-that only trades a handful of times a day can score lower here than a
-thinner-margin item that cycles constantly — that's the point: it's the
-numeric backing for the Workflow 5 observation that a slow-cycling margin
-can be worse than a fast-cycling thinner one. Treat it as a comparative
-ranking aid, not a literal forecast of daily return — it assumes the
-position keeps capturing a representative share of daily volume, which a
-single static buy order won't literally do order-by-order.
+**Yield (M/1M/day) is a velocity-adjusted capital-efficiency score, not
+margin restated.** Plain profit ÷ capital invested is almost the same
+number as margin % (margin's denominator just adds the buy-side broker
+fee) — it tells you nothing margin doesn't already say. This column
+instead folds in how often the trade can realistically repeat:
+`(profit_per_unit / unit_price) * trades_per_day`, read as "M ISK of
+profit per day, per 1M ISK committed" — e.g. a value of 8.2 means 8.2M
+ISK/day of profit-earning-potential for every 1M ISK tied up. Deliberately
+expressed with the same unit base (millions) on both sides of the ratio
+rather than as a bare percentage, since "820%/day" reads like a literal
+compounding return and invites the (wrong) conclusion that the position
+doubles your money twice a day. It is also deliberately scale-independent
+(the same value regardless of how many units you size) because it's meant
+to rank *opportunities* before a size is chosen, not to restate the sized
+position's profit. A high-margin item that only trades a handful of times
+a day can score lower here than a thinner-margin item that cycles
+constantly — that's the point: it's the numeric backing for the
+Workflow 5 observation that a slow-cycling margin can be worse than a
+fast-cycling thinner one. Treat it as a comparative ranking aid, not a
+literal forecast of daily return — it assumes the position keeps
+capturing a representative share of daily volume, which a single static
+buy order won't literally do order-by-order.
 """
 
 from __future__ import annotations
@@ -139,9 +145,12 @@ def size_positions(
     for name, unit_price, raw_units, margin_pct, trades_per_day, profit_per_unit, note in candidates:
         units = _round_to_increment(raw_units, unit_increment)
         total_profit = profit_per_unit * units
-        yield_per_day_pct = (profit_per_unit / unit_price) * trades_per_day * 100 if unit_price else 0.0
+        # M ISK of profit per day, per 1M ISK committed — same unit base
+        # (millions) on both sides, so e.g. 8.2 reads as "8.2M ISK/day per
+        # 1M ISK committed," not a percentage. See module docstring.
+        yield_m_per_1m_day = (profit_per_unit / unit_price) * trades_per_day if unit_price else 0.0
         prepared.append(
-            (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_per_day_pct, note)
+            (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note)
         )
 
     if rank_by_profit:
@@ -149,12 +158,12 @@ def size_positions(
 
     header = (
         f"{'Item':50s} {'Unit price':>13s} {'Units':>6s} {'Cost':>14s} "
-        f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s} {'Yield/day':>10s}  Running"
+        f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s} {'M/1M/day':>10s}  Running"
     )
     print(header)
     print("-" * len(header))
 
-    for name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_per_day_pct, note in prepared:
+    for name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note in prepared:
         cost = unit_price * units
         if stop_at_buffer and (wallet - (running + cost)) < buffer_floor:
             excluded.append(name)
@@ -171,14 +180,14 @@ def size_positions(
                 "trades_per_day": trades_per_day,
                 "profit_per_unit": profit_per_unit,
                 "total_profit": total_profit,
-                "yield_per_day_pct": yield_per_day_pct,
+                "yield_m_per_1m_day": yield_m_per_1m_day,
                 "note": note,
                 "running_total": running,
             }
         )
         print(
             f"{name:50s} {unit_price:>13,.0f} {units:>6d} {cost:>14,.0f} "
-            f"{margin_pct:6.1f}% {trades_per_day:>9.0f} {total_profit:>14,.0f} {yield_per_day_pct:>9.1f}%  {running:>14,.0f}   ({note})"
+            f"{margin_pct:6.1f}% {trades_per_day:>9.0f} {total_profit:>14,.0f} {yield_m_per_1m_day:>8.1f}M  {running:>14,.0f}   ({note})"
         )
 
     buffer = wallet - running
