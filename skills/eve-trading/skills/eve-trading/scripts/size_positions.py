@@ -6,7 +6,7 @@ Takes a list of candidates (kills, increases, or new positions) plus the
 available capital and a buffer target, ranks them by **absolute profit**
 (not margin %), and prints the table in the skill's required format:
 Item | Unit price | Units | Cost | Margin | Trades/day | Total profit |
-Running.
+Yield/day | Running.
 
 This exists because the same sizing/running-total/buffer-check logic has
 been hand-rewritten inline many times across trading sessions — pulling it
@@ -61,6 +61,23 @@ If greedily filling in profit order would blow past the buffer target,
 this script stops adding rows once the target is hit and reports what was
 left out — it does not silently shrink unit counts to make things fit.
 Trim candidates yourself and re-run if the leftovers matter.
+
+**Yield/day is a velocity-adjusted capital-efficiency score, not margin
+restated.** Plain profit ÷ capital invested is almost the same number as
+margin % (margin's denominator just adds the buy-side broker fee) — it
+tells you nothing margin doesn't already say. Yield/day instead folds in
+how often the trade can realistically repeat: `(profit_per_unit /
+unit_price) * trades_per_day * 100`, expressed as a percent. It is
+deliberately scale-independent (the same value regardless of how many
+units you size) because it's meant to rank *opportunities* before a size
+is chosen, not to restate the sized position's profit. A high-margin item
+that only trades a handful of times a day can score lower here than a
+thinner-margin item that cycles constantly — that's the point: it's the
+numeric backing for the Workflow 5 observation that a slow-cycling margin
+can be worse than a fast-cycling thinner one. Treat it as a comparative
+ranking aid, not a literal forecast of daily return — it assumes the
+position keeps capturing a representative share of daily volume, which a
+single static buy order won't literally do order-by-order.
 """
 
 from __future__ import annotations
@@ -122,19 +139,22 @@ def size_positions(
     for name, unit_price, raw_units, margin_pct, trades_per_day, profit_per_unit, note in candidates:
         units = _round_to_increment(raw_units, unit_increment)
         total_profit = profit_per_unit * units
-        prepared.append((name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, note))
+        yield_per_day_pct = (profit_per_unit / unit_price) * trades_per_day * 100 if unit_price else 0.0
+        prepared.append(
+            (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_per_day_pct, note)
+        )
 
     if rank_by_profit:
         prepared.sort(key=lambda row: row[6], reverse=True)
 
     header = (
         f"{'Item':50s} {'Unit price':>13s} {'Units':>6s} {'Cost':>14s} "
-        f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s}  Running"
+        f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s} {'Yield/day':>10s}  Running"
     )
     print(header)
     print("-" * len(header))
 
-    for name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, note in prepared:
+    for name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_per_day_pct, note in prepared:
         cost = unit_price * units
         if stop_at_buffer and (wallet - (running + cost)) < buffer_floor:
             excluded.append(name)
@@ -151,13 +171,14 @@ def size_positions(
                 "trades_per_day": trades_per_day,
                 "profit_per_unit": profit_per_unit,
                 "total_profit": total_profit,
+                "yield_per_day_pct": yield_per_day_pct,
                 "note": note,
                 "running_total": running,
             }
         )
         print(
             f"{name:50s} {unit_price:>13,.0f} {units:>6d} {cost:>14,.0f} "
-            f"{margin_pct:6.1f}% {trades_per_day:>9.0f} {total_profit:>14,.0f}  {running:>14,.0f}   ({note})"
+            f"{margin_pct:6.1f}% {trades_per_day:>9.0f} {total_profit:>14,.0f} {yield_per_day_pct:>9.1f}%  {running:>14,.0f}   ({note})"
         )
 
     buffer = wallet - running
