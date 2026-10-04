@@ -74,4 +74,9 @@ Pre-send checklist:
 - [ ] Said that nothing has been cancelled or placed
 ```
 
-**Refreshing a plan** ("refresh this plan against current prices"): re-pull the wallet and open orders first. Anything that has filled or disappeared since the last plan drops off the cut list — say what changed (an order that filled is a conversion, not a kill). Re-run the two-call margins on every cut and every redeploy row and re-run the sizing. Present a short "what moved since the last plan" table (item, before, now), including any row that crossed a floor. State whether the depth checks were repeated; if they weren't, say so and tell the user to re-verify before placing. ESI caches orders, assets and transactions, so a fill can be invisible for several minutes — report what is visible rather than assert where units went.
+**Refreshing a plan** ("refresh this plan against current prices"):
+- Re-pull the wallet and open orders first. Anything that has filled or disappeared since the last plan drops off the cut list — say what changed (a filled order is a conversion, not a kill).
+- Re-run the two-call margins on every cut and every redeploy row, then re-run the sizing.
+- Present a short "what moved since the last plan" table (item, before, now), including any row that crossed a floor.
+- State whether the depth checks were repeated; if not, say so and tell the user to re-verify before placing.
+- ESI caches orders, assets and transactions, so a fill can be invisible for several minutes — report what is visible rather than assert where units went.

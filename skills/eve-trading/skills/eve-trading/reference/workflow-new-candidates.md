@@ -4,7 +4,7 @@ Runs when new candidates are explicitly requested. Fetches its own A4E data — 
 
 ## Contents
 - [Step 1 — fetch all three A4E snapshots](#step-1--fetch-all-three-a4e-margin-finder-snapshots-directly)
-- [Steps 2–7 — filter, rank, verify, size](#step-2--7)
+- [Steps 2–7 — filter, rank, verify, size](#step-27)
 
 ## Step 1 — fetch all three A4E margin-finder snapshots directly
 
@@ -17,7 +17,9 @@ Don't wait for the user to paste one, and don't substitute a generic/default-fil
 - **T3**: `https://dev.adam4eve.eu/margin_finder.php?category=&group=&mgroup=&hub=1&region=&station=&buyGT=20.000.000%2C0&buyLT=50000000%2C0&tradesGT=10&tradesLT=&tradeIskGT=200.000.000&tradeIskLT=&supplyGT=&supplyLT=&trackVolGT=0.2&trackVolLT=5.0&trackNumGT=0.2&trackNumLT=5.0&buyFee=0.5&sellFee=1.5&salesTax=3.4&rows=50&cpage=1`
   Filters: buy price 20M–50M ISK, ≥10 trades/day, ≥200M ISK/day traded, track-volatility band 0.2–5.0, track-number band 0.2–5.0.
 
-All three already bake in the current hybrid fee profile (buyFee=0.5 matching Perimeter HQ, sellFee=1.5 and salesTax=3.4 matching Jita 4-4) — A4E doesn't model cross-station buy/sell splits natively, so this is the closest single-profile approximation of the real friction. Each returns up to 50 rows (`rows=50&cpage=1`); use `cpage=2` on a given tier if more depth is needed. **If the fee profile or either location ever changes again, these three URLs' `buyFee`/`sellFee`/`salesTax` params need updating to match — see [margin-verification.md](margin-verification.md) ("Fee numbers drift") — or they will silently drift out of sync with the live ESI numbers.**
+All three already bake in the current hybrid fee profile (`buyFee=0.5` matching Perimeter HQ, `sellFee=1.5` and `salesTax=3.4` matching Jita 4-4). A4E doesn't model cross-station buy/sell splits natively, so this is the closest single-profile approximation of the real friction.
+- Each returns up to 50 rows (`rows=50&cpage=1`); use `cpage=2` on a given tier if more depth is needed.
+- **If the fee profile or either location ever changes, update the `buyFee`/`sellFee`/`salesTax` params of all three URLs** — see [margin-verification.md](margin-verification.md) ("Fee numbers drift") — or they silently drift out of sync with the live ESI numbers.
 
 ## Step 2–7
 
@@ -38,4 +40,6 @@ All three already bake in the current hybrid fee profile (buyFee=0.5 matching Pe
      Anything excluded here goes in an "excluded after checks" list with its reason, so the user sees what was rejected and why.
 5. Present candidates with: item name, live-verified margin % (from the combined two-call calculation), daily trade count, the sized units as a share of daily trades, a one-line rationale, and a **suggested starting size** (units + ISK) per the sizing rule in SKILL.md. Rows below the profit-per-slot floor are flagged, and the proposal reports the order count and tier mix before and after (SKILL.md, "Slot discipline"). When the request is a full redeploy, follow [capital-allocation.md](capital-allocation.md).
 6. Do NOT flag or comment on the character's existing open orders for the same item in this workflow — that's the portfolio review's job.
-7. **Repeat-cancellation check — targeted, not blanket.** If a candidate is one the user has held and killed before (recognizable from conversation context/memory — e.g. it was in a kill list earlier in this session or a recent one), don't just re-add it on today's margin alone. Call `get_order_history(type_id=X, side="buy", state="cancelled")` for that item before recommending it again — this returns only that item's cancelled buy orders directly, no need to pull the full history and filter client-side. If it shows 2+ prior buy orders cancelled while less than half filled (`volumeRemain` close to `volumeTotal`), treat it as a weak candidate: say so plainly, and only recommend reopening if today's margin is meaningfully above threshold (not just barely over) — otherwise it's likely to repeat the same open-barely-fill-cancel cycle. This check only runs when reopening a known repeat offender, not as a standing step on every new-candidate scan.
+7. **Repeat-cancellation check — targeted, not blanket.** Runs only when reopening a candidate the user has held and killed before (recognizable from conversation context or memory, e.g. it was in a recent kill list), not on every scan.
+   - Don't re-add it on today's margin alone. Call `get_order_history(type_id=X, side="buy", state="cancelled")` — it returns only that item's cancelled buys, so no client-side filtering.
+   - If it shows 2+ prior buy orders cancelled while less than half filled (`volumeRemain` close to `volumeTotal`), treat it as weak: say so plainly, and recommend reopening only if today's margin is meaningfully above threshold, not barely over — otherwise expect the same open-barely-fill-cancel cycle.

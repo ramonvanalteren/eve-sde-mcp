@@ -119,6 +119,24 @@ class SkillStructure(unittest.TestCase):
                     missing.append(f"{doc.name} -> {m.group(1)}")
         self.assertEqual(missing, [])
 
+    def test_heading_anchor_links_resolve(self):
+        def slug(heading):
+            # GitHub's anchor rule: lowercase, drop punctuation except hyphens, spaces -> hyphens
+            return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+
+        anchors = {
+            doc.resolve(): {slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.*)$", doc.read_text(encoding="utf-8"), re.M)}
+            for doc in DOCS
+        }
+        broken = []
+        for doc in DOCS:
+            text = doc.read_text(encoding="utf-8")
+            for m in re.finditer(r"\]\(([^)\s#]*\.md)?#([^)\s]+)\)", text):
+                target = (doc.parent / m.group(1)).resolve() if m.group(1) else doc.resolve()
+                if target in anchors and m.group(2) not in anchors[target]:
+                    broken.append(f"{doc.name} -> {m.group(1) or ''}#{m.group(2)}")
+        self.assertEqual(broken, [])
+
     def test_report_templates_and_checklists_are_present(self):
         review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
         plan = (SKILL / "reference" / "capital-allocation.md").read_text(encoding="utf-8")
