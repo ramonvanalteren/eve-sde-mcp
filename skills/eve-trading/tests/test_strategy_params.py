@@ -149,6 +149,30 @@ class SkillStructure(unittest.TestCase):
                     offenders.append(f"{name}: {m.group(0)!r}")
         self.assertEqual(offenders, [], "dated book state in a rule file: " + ", ".join(offenders))
 
+    def test_no_file_claims_a_reprice_creates_a_new_order_id(self):
+        # Wrong claim that shipped once: a price change cancels and recreates the order. In fact the
+        # order keeps its order_id and only `issued` resets. failure-cases.md quotes the wrong claim
+        # in its correction note, so it is the one file exempt from this scan.
+        wrong = [
+            r"(?:reprice|relist|modif)[^.\n]{0,120}new\s+`?order_id`?",
+            r"cancels\s+and\s+recreates",
+            r"no\s+in-place\s+price\s+edit",
+        ]
+        offenders = []
+        for doc in DOCS:
+            if doc.name == "failure-cases.md":
+                continue
+            text = doc.read_text(encoding="utf-8")
+            for pattern in wrong:
+                for m in re.finditer(pattern, text, re.I):
+                    offenders.append(f"{doc.name}: {m.group(0)!r}")
+        self.assertEqual(offenders, [], "claims a reprice creates a new order: " + ", ".join(offenders))
+
+    def test_review_states_the_reprice_rule(self):
+        review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
+        self.assertIn("keeps its `order_id` and resets `issued`", review)
+        self.assertIn("`volumeTotal − volumeRemain`", review)
+
     def test_report_templates_and_checklists_are_present(self):
         review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
         plan = (SKILL / "reference" / "capital-allocation.md").read_text(encoding="utf-8")
