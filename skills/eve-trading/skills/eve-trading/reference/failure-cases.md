@@ -16,6 +16,8 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [`issued` timestamp mistaken for position age (Coreli A-Type Thermal Coating)](#issued-timestamp-mistaken-for-position-age-coreli-a-type-thermal-coating)
 - [Increase recommended without checking existing order capacity (Graviton Physics, Mechanical Engineering)](#increase-recommended-without-checking-existing-order-capacity-graviton-physics-mechanical-engineering)
 - [Weekly seasonality not accounted for in fill-velocity reads](#weekly-seasonality-not-accounted-for-in-fill-velocity-reads)
+- [Yield ranking alone favours small slots (2026-10-04)](#yield-ranking-alone-favours-small-slots-2026-10-04)
+- [Judging a strategy change by net worth or by a window that predates it (2026-10-04)](#judging-a-strategy-change-by-net-worth-or-by-a-window-that-predates-it-2026-10-04)
 
 ## Sell-only items reported as buy-side verdicts (twice)
 
@@ -95,3 +97,15 @@ A 13-day zero-fill gap on Graviton Physics (Sun 08-23 → Fri 09-04) was read as
 *Rule it motivates: don't use the current order's `issued` timestamp as position age — corroborate with `get_wallet_transactions` (Workflow 2's Kill note; Workflow 5, "Order age").*
 
 26 of 30 open buy orders showed an `issued` timestamp from the same day, and this was reported as "almost the entire buy book is the aftermath of today's capital deployment." Wrong: Coreli A-Type Thermal Coating alone had wallet fills back to 2026-08-15 (48 transactions) and three prior *cancelled* orders in `get_order_history` (07-31, 09-04, 09-11) — a month-old, continuously-converting position that had simply been repriced that day, like several others in the same batch. `issued` resets on every relist because EVE's order modification cancels and recreates the order (new `order_id`, fresh timestamp) rather than editing price in place — it cannot distinguish "opened five minutes ago" from "open for a month, repriced five minutes ago" without checking fill history first.
+
+## Yield ranking alone favours small slots (2026-10-04)
+
+*Rule it motivates: the profit-per-slot floor (SKILL.md, "Slot discipline"; strategy.md). The user later set the floor at 10M per cycle and said there is no cap on order count — 40-60 open buys is fine.*
+
+By 2 Oct the book held about 40 open buy orders against 15 sells (35 buys and 4.07B of escrow, many idle for days); the user asked to cut the count and said they didn't understand why small amounts of items were being bought. The user then asked for candidates to be ranked by M/1M/day, and the 4 Oct redeploy plan showed that key's side effect: Signal Amplifier II, 720mm Howitzer Artillery II and Ice Harvester I each earned under 10M per cycle yet ranked in the top 13, and the plan took the book from 31 orders to 41. The live book afterwards had 15 of 39 orders holding under 50M of escrow each — 8.9% of escrow between them. M/1M/day measures velocity-adjusted efficiency, not whether a slot is worth having — hence the per-cycle profit floor alongside it.
+
+## Judging a strategy change by net worth or by a window that predates it (2026-10-04)
+
+*Rule it motivates: the strategy scorecard (workflow-daily-close.md, step 8).*
+
+Asked whether the renewed strategy was paying off, the first instinct was net worth. The closes can't support that: `reconciliation_gap` ran from −5.4B (27 Sep) to +1.3B (1 Oct), `escrow_committed` went negative on 27–28 Sep, and about 440M left the wallet through non-trading journal entries in the week (216M on 30 Sep, 117M on 2 Oct). Realized net P&L showed a +20% week-over-week gain (918M to 1,098M), but the median day was flat (138M vs 140M), the best days were 27 and 29 Sep — before the rule changes — and the like-for-like Thu–Sat comparison after the change was flat (424M vs 426M). A headline gain that predates the change, or rests on a few outlier days, is not evidence for it.
