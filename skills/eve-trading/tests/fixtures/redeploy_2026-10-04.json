@@ -1,0 +1,157 @@
+{
+  "wallet": 1415400000,
+  "freed": 1095100000,
+  "buffer_target_isk": 400000000,
+  "current_open_orders": 25,
+  "current_tier_escrow": {
+    "T1": 407000000,
+    "T2": 685000000,
+    "T3": 1395000000
+  },
+  "candidates": [
+    {
+      "name": "Signal Amplifier II",
+      "unit_price": 614400,
+      "units": 80,
+      "margin_pct": 17.1,
+      "trades_per_day": 159,
+      "profit_per_unit": 105588,
+      "note": ""
+    },
+    {
+      "name": "Fierce Exotic Filament",
+      "unit_price": 2925000,
+      "units": 80,
+      "margin_pct": 12.9,
+      "trades_per_day": 185,
+      "profit_per_unit": 379212,
+      "note": ""
+    },
+    {
+      "name": "720mm Howitzer Artillery II",
+      "unit_price": 1395000,
+      "units": 30,
+      "margin_pct": 17.8,
+      "trades_per_day": 66,
+      "profit_per_unit": 249552,
+      "note": ""
+    },
+    {
+      "name": "Unstable Magnetic Field Stabilizer Mutaplasmid",
+      "unit_price": 5003000,
+      "units": 20,
+      "margin_pct": 24.3,
+      "trades_per_day": 45,
+      "profit_per_unit": 1221808,
+      "note": ""
+    },
+    {
+      "name": "Corpum C-Type Medium Energy Nosferatu",
+      "unit_price": 8428000,
+      "units": 10,
+      "margin_pct": 49.2,
+      "trades_per_day": 22,
+      "profit_per_unit": 4167309,
+      "note": ""
+    },
+    {
+      "name": "Polarized Neutron Blaster Cannon",
+      "unit_price": 13820000,
+      "units": 10,
+      "margin_pct": 39.3,
+      "trades_per_day": 25,
+      "profit_per_unit": 5458416,
+      "note": ""
+    },
+    {
+      "name": "Imperial Navy 200mm Steel Plates",
+      "unit_price": 9311000,
+      "units": 10,
+      "margin_pct": 39.4,
+      "trades_per_day": 24,
+      "profit_per_unit": 3686877,
+      "note": ""
+    },
+    {
+      "name": "Moa",
+      "unit_price": 8239000,
+      "units": 15,
+      "margin_pct": 24.2,
+      "trades_per_day": 39,
+      "profit_per_unit": 2003807,
+      "note": ""
+    },
+    {
+      "name": "Corpum A-Type EM Energized Membrane",
+      "unit_price": 42420000,
+      "units": 5,
+      "margin_pct": 42.6,
+      "trades_per_day": 21,
+      "profit_per_unit": 18161275,
+      "note": ""
+    },
+    {
+      "name": "Dread Guristas Shield Boost Amplifier",
+      "unit_price": 10030000,
+      "units": 20,
+      "margin_pct": 19.4,
+      "trades_per_day": 41,
+      "profit_per_unit": 1955549,
+      "note": ""
+    },
+    {
+      "name": "Republic Fleet Commander Insignia I",
+      "unit_price": 7095000,
+      "units": 25,
+      "margin_pct": 12.7,
+      "trades_per_day": 58,
+      "profit_per_unit": 905570,
+      "note": ""
+    },
+    {
+      "name": "Proximity-15 'Extraction' Filament",
+      "unit_price": 6526000,
+      "units": 15,
+      "margin_pct": 22.2,
+      "trades_per_day": 33,
+      "profit_per_unit": 1456016,
+      "note": ""
+    },
+    {
+      "name": "Ice Harvester I",
+      "unit_price": 2448000,
+      "units": 25,
+      "margin_pct": 12.3,
+      "trades_per_day": 58,
+      "profit_per_unit": 302610,
+      "note": ""
+    },
+    {
+      "name": "Osprey",
+      "unit_price": 7695000,
+      "units": 15,
+      "margin_pct": 15.2,
+      "trades_per_day": 35,
+      "profit_per_unit": 1175488,
+      "note": ""
+    },
+    {
+      "name": "Hound",
+      "unit_price": 13090000,
+      "units": 10,
+      "margin_pct": 15.5,
+      "trades_per_day": 21,
+      "profit_per_unit": 2039095,
+      "note": ""
+    },
+    {
+      "name": "Imperial Navy 800mm Steel Plates",
+      "unit_price": 18960000,
+      "units": 10,
+      "margin_pct": 13.7,
+      "trades_per_day": 23,
+      "profit_per_unit": 2610508,
+      "note": ""
+    }
+  ]
+}

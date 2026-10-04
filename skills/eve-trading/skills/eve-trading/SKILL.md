@@ -56,7 +56,19 @@ Sizing method:
 4. For **Kill**, state the ISK recovered: unit count × price × (freed escrow), so the user knows exactly what capital comes back.
 5. For **Increase**, suggest an incremental unit count and its ISK cost, sized against both remaining wallet capacity and the sizing band above — don't suggest doubling a position that only trades 12 units/day. New increments go to Perimeter HQ per the Workflow 2 execution note.
 6. For **new candidates**, suggest a starting position size (units + ISK) at Perimeter HQ, scaled down for thinner items and up for deep/liquid ones, and note if slot capacity is a constraint.
-7. Once you've picked unit counts per candidate (that judgment call — depth, thin-book caution — stays with you, not the script), hand the list to `scripts/size_positions.py` in this skill folder to do the arithmetic and print the table. Pass it each candidate's verified `profitPerUnit` (from `get_portfolio_margins`, or computed by hand) alongside unit_price/units/margin_pct/trades_per_day — the script rounds units to the nearest multiple of 5 per the rule above, computes each position's total profit from the *rounded* units, **ranks candidates by M/1M/day** (see "Rank by M/1M/day" below), and runs the buffer walk. In a redeploy pass `freed=` (escrow from the assumed Kills) and `buffer_target_isk=` (the user states buffers in ISK); pass `current_open_orders=` and `current_tier_escrow=` (both after the assumed Kills) so it prints the order count and tier mix before/after. It also flags rows over the band ceiling, excludes thin items, flags rows under the profit-per-slot floor, and prints the fewer-orders variant. It has no fee assumptions baked in, so it's unaffected by the two-location fee split — all fee handling happens upstream, in the margin/profit numbers you feed it. Read the script's docstring for the exact interface (library form: `size_positions(candidates, wallet=..., ...)`; the module's `__main__` is a runnable example). If the script isn't reachable for some reason, fall back to computing inline, but reach for it first.
+7. Once you've picked unit counts per candidate (depth and thin-book judgement stay with you, not the script), **run `scripts/size_positions.py` from this skill's folder** — execute it, don't read it. It needs only Python 3.9+, no packages.
+
+   ```bash
+   python scripts/size_positions.py plan.json   # table + slot-discipline summary
+   python scripts/size_positions.py --example   # print a sample plan.json to copy
+   python scripts/size_positions.py --params    # print the strategy parameters in force
+   ```
+
+   - **Per candidate:** `name`, `unit_price`, `units`, `margin_pct`, `trades_per_day`, and the verified `profit_per_unit` (from `get_portfolio_margins`, or `sell×0.951 − buy×1.005`). Fee handling stays upstream, in those figures.
+   - **Plan level:** `wallet`. In a redeploy also `freed` (escrow from the assumed Kills) and `buffer_target_isk` (the user states buffers in ISK), plus `current_open_orders` and `current_tier_escrow` (both after the assumed Kills) for the before/after lines.
+   - **It validates first.** A missing or implausible field stops it with a message naming every problem (fix the plan and re-run); a margin that doesn't match its profit prints a WARNING, which usually means the wrong figure was fed.
+   - **Then:** rounds units, ranks by M/1M/day (see "Rank by M/1M/day" below), runs the buffer walk, flags OVER-BAND and SMALL-SLOT rows, excludes thin items, and prints the order count, tier mix and fewer-orders variant.
+   - Library use (`from size_positions import size_positions`) is in the script's docstring. If the script is unreachable, compute inline, but reach for it first.
 
 **Required table template.** The script above already outputs this format, so following the sizing method naturally produces a compliant table:
 

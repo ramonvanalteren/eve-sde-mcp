@@ -18,6 +18,20 @@ boundaries, ...) are read from the JSON block in reference/strategy.md — the
 single source of truth — and printed at the top of every run. Pass a keyword
 argument to override one for a single run.
 
+Command line (the usual way — run it, don't read it; stdlib only, Python 3.9+):
+
+    python scripts/size_positions.py plan.json     # table + slot-discipline summary
+    python scripts/size_positions.py --example     # print a sample plan.json
+    python scripts/size_positions.py --params      # print the strategy parameters in force
+    python scripts/size_positions.py plan.json --json   # structured result instead of the table
+
+plan.json holds `wallet`, `candidates` (objects with name, unit_price, units,
+margin_pct, trades_per_day, profit_per_unit and an optional note), and
+optionally `freed`, `buffer_target_isk`, `current_open_orders`,
+`current_tier_escrow` and an `options` object. The script validates the plan
+and exits with status 2 and a message listing every problem found; margin /
+profit mismatches and repeated names are printed as WARNING lines instead.
+
 Usage as a library (called from a short Python snippet inside the session):
 
     from size_positions import size_positions
@@ -88,8 +102,13 @@ fewer-orders variant: the shortest prefix of the ranked list that holds
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import json
+import math
 import re
+import sys
 from pathlib import Path
 
 PARAMS_FILE = Path(__file__).resolve().parent.parent / "reference" / "strategy.md"
@@ -177,6 +196,118 @@ def _fmt_mix(escrow_by_tier: dict) -> str:
     return " / ".join(parts) if parts else "n/a"
 
 
+class InputError(ValueError):
+    """The plan handed to size_positions is unusable; the message lists every problem found."""
+
+
+_CANDIDATE_FIELDS = ("name", "unit_price", "units", "margin_pct", "trades_per_day", "profit_per_unit", "note")
+_TIER_KEYS = ("micro", "T1", "T2", "T3", "T4+")
+# Perimeter buy fee (0.5%) — only used for the soft margin/profit consistency warning, never for sizing.
+_IMPLIED_MARGIN_BUY_FACTOR = 1.005
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _validate_inputs(
+    candidates,
+    wallet,
+    freed,
+    buffer_target_pct,
+    buffer_target_isk,
+    current_open_orders,
+    current_tier_escrow,
+    min_profit_per_slot,
+    trade_share_band,
+):
+    """Return (normalized candidates, warnings); raise InputError listing every problem found.
+
+    Errors are things that make the arithmetic meaningless (missing or non-numeric
+    fields, non-positive prices or profits). Warnings are things that are probably
+    a slip but computable: a margin that does not match its profit, a repeated name.
+    """
+    problems: list[str] = []
+    warnings: list[str] = []
+    rows = []
+
+    if not isinstance(candidates, (list, tuple)) or not candidates:
+        problems.append(f"candidates must be a non-empty list of {_CANDIDATE_FIELDS}")
+    else:
+        first_seen: dict[str, int] = {}
+        for i, row in enumerate(candidates, start=1):
+            if not isinstance(row, (list, tuple)) or len(row) != len(_CANDIDATE_FIELDS):
+                problems.append(f"row {i}: expected {len(_CANDIDATE_FIELDS)} values {_CANDIDATE_FIELDS}, got {row!r}")
+                continue
+            name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, note = row
+            tag = f"row {i} ({name!r})"
+            row_ok = True
+            if not isinstance(name, str) or not name.strip():
+                problems.append(f"row {i}: name must be a non-empty string, got {name!r}")
+                row_ok = False
+            for field, value, rule, valid in (
+                ("unit_price", unit_price, "a positive number of ISK", lambda v: v > 0),
+                ("units", units, "a number, at least 1", lambda v: v >= 1),
+                ("margin_pct", margin_pct, "a positive percentage (the verified two-call margin)", lambda v: v > 0),
+                ("trades_per_day", trades_per_day, "a number, 0 or more (0 = unknown)", lambda v: v >= 0),
+                ("profit_per_unit", profit_per_unit, "a positive ISK amount (the verified profit per unit)", lambda v: v > 0),
+            ):
+                if not _is_number(value) or not valid(value):
+                    problems.append(f"{tag}: {field} must be {rule}, got {value!r}")
+                    row_ok = False
+            if note is not None and not isinstance(note, str):
+                problems.append(f"{tag}: note must be text, got {note!r}")
+                row_ok = False
+            if not row_ok:
+                continue
+            implied = profit_per_unit / (unit_price * _IMPLIED_MARGIN_BUY_FACTOR) * 100
+            if abs(implied - margin_pct) > max(1.0, 0.05 * margin_pct):
+                warnings.append(
+                    f"{name}: margin_pct {margin_pct:g}% but profit_per_unit / unit_price implies about {implied:.1f}% — "
+                    "check that profit_per_unit is the per-unit profit at the verified (two-call) margin"
+                )
+            if name in first_seen:
+                warnings.append(
+                    f"{name!r} appears in rows {first_seen[name]} and {i} — fine for a second order on the same item, a mistake otherwise"
+                )
+            first_seen.setdefault(name, i)
+            rows.append((name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, note or ""))
+
+    for label, value in (("wallet", wallet), ("freed", freed)):
+        if not _is_number(value) or value < 0:
+            problems.append(f"{label} must be a number of ISK, 0 or more, got {value!r}")
+    if buffer_target_isk is not None and (not _is_number(buffer_target_isk) or buffer_target_isk < 0):
+        problems.append(f"buffer_target_isk must be a number of ISK, 0 or more, got {buffer_target_isk!r}")
+    if not _is_number(buffer_target_pct) or not 0 <= buffer_target_pct <= 100:
+        problems.append(f"buffer_target_pct must be between 0 and 100, got {buffer_target_pct!r}")
+    if current_open_orders is not None and (
+        isinstance(current_open_orders, bool) or not isinstance(current_open_orders, int) or current_open_orders < 0
+    ):
+        problems.append(f"current_open_orders must be a whole number, 0 or more, got {current_open_orders!r}")
+    if current_tier_escrow is not None:
+        if not isinstance(current_tier_escrow, dict):
+            problems.append(f"current_tier_escrow must be a mapping of tier -> ISK, got {current_tier_escrow!r}")
+        else:
+            for tier, value in current_tier_escrow.items():
+                if tier not in _TIER_KEYS:
+                    problems.append(f"current_tier_escrow has unknown tier {tier!r}; use {_TIER_KEYS}")
+                elif not _is_number(value) or value < 0:
+                    problems.append(f"current_tier_escrow[{tier!r}] must be a number of ISK, 0 or more, got {value!r}")
+    if min_profit_per_slot is not None and (not _is_number(min_profit_per_slot) or min_profit_per_slot < 0):
+        problems.append(f"min_profit_per_slot must be a number of ISK, 0 or more, or None, got {min_profit_per_slot!r}")
+    if (
+        not isinstance(trade_share_band, (list, tuple))
+        or len(trade_share_band) != 2
+        or not all(_is_number(v) for v in trade_share_band)
+        or not 0 < trade_share_band[0] < trade_share_band[1] <= 100
+    ):
+        problems.append(f"trade_share_band must be (low, high) percentages with 0 < low < high <= 100, got {trade_share_band!r}")
+
+    if problems:
+        raise InputError("size_positions input problems:\n  - " + "\n  - ".join(problems))
+    return rows, warnings
+
+
 def size_positions(
     candidates: list[tuple[str, int, int, float, float, float, str]],
     wallet: float,
@@ -228,7 +359,7 @@ def size_positions(
     variant_profit_share: fraction of total profit the fewer-orders variant
         must retain.
 
-    Returns a dict with: parameters (the resolved limits used), rows, total,
+    Returns a dict with: parameters (the resolved limits used), warnings, rows, total,
     total_profit, buffer, buffer_pct, pool, excluded (names),
     excluded_reasons (name -> reason), small_slot (names), over_band (names),
     order_count_after, tier_mix_after, variant.
@@ -247,6 +378,11 @@ def size_positions(
         rank_by = "profit" if rank_by_profit else "input"
     if rank_by not in ("yield", "profit", "input"):
         raise ValueError(f"rank_by must be 'yield', 'profit' or 'input', got {rank_by!r}")
+
+    candidates, warnings = _validate_inputs(
+        candidates, wallet, freed, buffer_target_pct, buffer_target_isk,
+        current_open_orders, current_tier_escrow, min_profit_per_slot, trade_share_band,
+    )
 
     pool = wallet + freed
     buffer_floor = buffer_target_isk if buffer_target_isk is not None else pool * (buffer_target_pct / 100.0)
@@ -281,6 +417,8 @@ def size_positions(
         f"comfortable orders {order_range[0]}-{order_range[1]}"
         + (f" | order cap {max_open_orders}" if max_open_orders is not None else "")
     )
+    for warning in warnings:
+        print(f"WARNING: {warning}")
     header = (
         f"{'Item':50s} {'Unit price':>13s} {'Units':>6s} {'Cost':>14s} "
         f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s} {'M/1M/day':>10s}  Running"
@@ -434,6 +572,7 @@ def size_positions(
             "t3_share_flag_pct": t3_share_flag_pct,
             "variant_profit_share": variant_profit_share,
         },
+        "warnings": warnings,
         "rows": included,
         "total": running,
         "total_profit": running_profit,
@@ -450,24 +589,130 @@ def size_positions(
     }
 
 
-if __name__ == "__main__":
-    # Smoke test / usage example (illustrative figures). The thin row is
-    # excluded outright (5 units = 63% of 8 trades/day), the cheap filler row
-    # is flagged SMALL-SLOT (about 1M per cycle, as is the cheap fast row at
-    # 8.4M, both under the profit-per-slot floor), and the tier mix / order
-    # count lines print.
-    example_candidates = [
-        ("Corpum C-Type Medium Energy Nosferatu", 8428000, 10, 49.2, 22, 4167000, "deep book"),
-        ("Moa", 8239000, 15, 24.2, 39, 2004000, "thin top asks"),
-        ("Signal Amplifier II", 614400, 80, 17.1, 159, 105600, "cheap, fast"),
-        ("Cheap filler example", 1000000, 10, 12.0, 60, 110000, "about 1M per cycle"),
-        ("Thin T3 example", 31000000, 5, 14.0, 8, 4300000, "5 units = 63% of a day"),
-    ]
-    size_positions(
-        example_candidates,
-        wallet=1_415_400_000,
-        freed=1_095_100_000,
-        buffer_target_isk=400_000_000,
-        current_open_orders=25,
-        current_tier_escrow={"T1": 407e6, "T2": 685e6, "T3": 1395e6},
+# ---------------------------------------------------------------------------
+# Command line:  python scripts/size_positions.py plan.json
+# ---------------------------------------------------------------------------
+
+EXAMPLE_PLAN = {
+    "wallet": 1_415_400_000,
+    "freed": 1_095_100_000,
+    "buffer_target_isk": 400_000_000,
+    "current_open_orders": 25,
+    "current_tier_escrow": {"T1": 407_000_000, "T2": 685_000_000, "T3": 1_395_000_000},
+    "candidates": [
+        {"name": "Corpum C-Type Medium Energy Nosferatu", "unit_price": 8_428_000, "units": 10,
+         "margin_pct": 49.2, "trades_per_day": 22, "profit_per_unit": 4_167_000, "note": "deep book"},
+        {"name": "Moa", "unit_price": 8_239_000, "units": 15,
+         "margin_pct": 24.2, "trades_per_day": 39, "profit_per_unit": 2_004_000, "note": "thin top asks"},
+        {"name": "Signal Amplifier II", "unit_price": 614_400, "units": 80,
+         "margin_pct": 17.1, "trades_per_day": 159, "profit_per_unit": 105_600, "note": "cheap, fast: small slot"},
+        {"name": "Thin T3 example", "unit_price": 31_000_000, "units": 5,
+         "margin_pct": 14.0, "trades_per_day": 8, "profit_per_unit": 4_300_000, "note": "thin: gets excluded"},
+    ],
+}
+
+_PLAN_KEYS = {
+    "wallet", "freed", "buffer_target_isk", "buffer_target_pct", "current_open_orders",
+    "current_tier_escrow", "candidates", "options",
+}
+_OPTION_KEYS = {
+    "buffer_target_pct", "stop_at_buffer", "unit_increment", "rank_by", "trade_share_band",
+    "min_profit_per_slot", "max_open_orders", "order_range", "t3_share_flag_pct", "variant_profit_share",
+}
+
+
+def _plan_to_kwargs(plan) -> dict:
+    """Turn a decoded plan.json into size_positions keyword arguments, or raise InputError."""
+    problems: list[str] = []
+    if not isinstance(plan, dict):
+        raise InputError("the plan must be a JSON object with at least `wallet` and `candidates`")
+    for key in sorted(set(plan) - _PLAN_KEYS):
+        problems.append(f"unknown plan field {key!r}; allowed: {sorted(_PLAN_KEYS)}")
+    for key in ("wallet", "candidates"):
+        if key not in plan:
+            problems.append(f"missing required plan field {key!r}")
+
+    candidates = []
+    raw = plan.get("candidates")
+    if isinstance(raw, list):
+        for i, item in enumerate(raw, start=1):
+            if isinstance(item, dict):
+                missing = [f for f in _CANDIDATE_FIELDS[:-1] if f not in item]
+                extra = sorted(set(item) - set(_CANDIDATE_FIELDS))
+                if missing:
+                    problems.append(f"row {i} ({item.get('name')!r}): missing {', '.join(missing)}")
+                if extra:
+                    problems.append(f"row {i} ({item.get('name')!r}): unknown field(s) {', '.join(extra)}")
+                if not missing and not extra:
+                    candidates.append(tuple(item.get(f) for f in _CANDIDATE_FIELDS))
+            else:
+                candidates.append(item)  # a 7-value list; _validate_inputs checks its shape
+    elif "candidates" in plan:
+        problems.append("`candidates` must be a list")
+
+    options = plan.get("options", {})
+    if not isinstance(options, dict):
+        problems.append("`options` must be an object")
+        options = {}
+    for key in sorted(set(options) - _OPTION_KEYS):
+        problems.append(f"unknown option {key!r}; allowed: {sorted(_OPTION_KEYS)}")
+    if problems:
+        raise InputError("plan problems:\n  - " + "\n  - ".join(problems))
+
+    kwargs = {k: plan[k] for k in _PLAN_KEYS - {"candidates", "options"} if k in plan}
+    kwargs["candidates"] = candidates if isinstance(raw, list) else raw
+    kwargs.update({k: v for k, v in options.items() if k in _OPTION_KEYS})
+    for key in ("trade_share_band", "order_range"):
+        if isinstance(kwargs.get(key), list):
+            kwargs[key] = tuple(kwargs[key])
+    return kwargs
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="size_positions.py",
+        description="Size candidate buy positions: rank by M/1M/day, run the buffer walk, print the required table "
+        "and the slot-discipline summary. Limits come from reference/strategy.md.",
     )
+    parser.add_argument("plan", nargs="?", help="path to a plan JSON file, or - for stdin")
+    parser.add_argument("--json", action="store_true", help="print the structured result as JSON instead of the table")
+    parser.add_argument("--example", action="store_true", help="print a sample plan.json and exit")
+    parser.add_argument("--params", action="store_true", help="print the strategy parameters in force and exit")
+    args = parser.parse_args(argv)
+
+    if args.params:
+        print(json.dumps(PARAMS, indent=2))
+        return 0
+    if args.example:
+        print(json.dumps(EXAMPLE_PLAN, indent=2))
+        return 0
+    if not args.plan:
+        parser.error("give a plan file (or - for stdin), or use --example / --params")
+
+    try:
+        text = sys.stdin.read() if args.plan == "-" else Path(args.plan).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"Input error: cannot read {args.plan}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        plan = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"Input error: {args.plan} is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        kwargs = _plan_to_kwargs(plan)
+        if args.json:
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = size_positions(**kwargs)
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            size_positions(**kwargs)
+    except InputError as exc:
+        print(f"Input error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
