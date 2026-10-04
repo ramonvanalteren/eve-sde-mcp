@@ -7,6 +7,7 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 - [Fee & margin math](#fee--margin-math)
 - [Margin thresholds](#margin-thresholds)
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
+- [The competitive bid](#the-competitive-bid)
 - [The jump-range competition check](#the-jump-range-competition-check)
 - [Thin single-unit outliers](#thin-single-unit-outliers)
 - [Fee numbers drift — verify via get_station_fees](#fee-numbers-drift--verify-via-get_station_fees)
@@ -52,6 +53,12 @@ Because buy and sell orders sit at two different locations with two different br
 3. **Combine manually per item** with the `nm()` formula above (`buy` = the buy-side call's `bestBuy` with its matching fee, `sell` = the sell-side call's `bestSell`). The tool's own single `margin` field is not valid for any item bought at Perimeter — don't cite it directly.
 
 This doubles the ESI calls per review compared to before the move. That's an accepted cost of the hybrid setup, not something to optimize away by guessing at one side.
+
+## The competitive bid
+
+For any margin on an open or proposed buy, "the bid" is the **competitive bid**: the highest of (a) the best buy at Perimeter HQ (the buy-side call's `bestBuy`), (b) the best buy at Jita 4-4, and (c) any range-1 bid at another nearby structure — e.g. structure 1042508032148, which appears in the ledger's station list. Sellers at Jita 4-4 take the highest bid they can reach, so a Perimeter order priced below any of these queues behind it. The Perimeter-side batch call only reports (a); get (b) from a Jita-side buy call or `get_region_orders`, and (c) from `get_region_orders` unfiltered by location (the same pull as the jump-range check below).
+
+Quote the **live margin at the competitive bid**, and the margin at the order's own price as well only when the two straddle the 10% floor. Housekeeping: structure 1042508032148 and a few other stations have no entry under `stationFees` in `~/.eve-sde/config.json`, so the daily close prices their broker fees at a generic 1% and flags it every run — pin the real fees with `get_station_fees` when they're known.
 
 ## The jump-range competition check
 
