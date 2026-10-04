@@ -1,0 +1,23 @@
+{
+  "characterName": "Eval Trader",
+  "assetCount": 1,
+  "locations": [
+    {
+      "locationId": 60003760,
+      "name": "Jita IV - Moon 4 - Caldari Navy Assembly Plant"
+    }
+  ],
+  "assets": [
+    {
+      "itemId": 9100000001,
+      "typeName": "Omnidirectional Tracking Link II",
+      "typeId": 24438,
+      "quantity": 20,
+      "locationId": 60003760,
+      "locationType": "station",
+      "locationFlag": "Hangar",
+      "isSingleton": false,
+      "locationName": "Jita IV - Moon 4 - Caldari Navy Assembly Plant"
+    }
+  ]
+}

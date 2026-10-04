@@ -1,0 +1,109 @@
+{
+  "locationId": 60003760,
+  "regionId": 10000002,
+  "salesTaxPct": 3.4,
+  "brokerFeePct": 1.5,
+  "itemCount": 9,
+  "items": [
+    {
+      "typeId": 648,
+      "typeName": "Badger",
+      "bestBuy": 690000,
+      "bestSell": 993500,
+      "spread": 30.548565676899848,
+      "margin": 34.9066181195117,
+      "profitPerUnit": 244468.50000000012,
+      "buyOrderCount": 9,
+      "sellOrderCount": 8
+    },
+    {
+      "typeId": 19107,
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "bestBuy": 8300000,
+      "bestSell": 11900000,
+      "spread": 30.252100840336134,
+      "margin": 34.33319484835896,
+      "profitPerUnit": 2892400.0,
+      "buyOrderCount": 12,
+      "sellOrderCount": 9
+    },
+    {
+      "typeId": 34282,
+      "typeName": "Polarized Neutron Blaster Cannon",
+      "bestBuy": 13700000,
+      "bestSell": 19500000,
+      "spread": 29.743589743589745,
+      "margin": 33.360900363165676,
+      "profitPerUnit": 4639000.000000002,
+      "buyOrderCount": 10,
+      "sellOrderCount": 14
+    },
+    {
+      "typeId": 19015,
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "bestBuy": 27000000,
+      "bestSell": 36500000,
+      "spread": 26.027397260273972,
+      "margin": 26.661193212917368,
+      "profitPerUnit": 7306500.000000004,
+      "buyOrderCount": 11,
+      "sellOrderCount": 12
+    },
+    {
+      "typeId": 11446,
+      "typeName": "Graviton Physics",
+      "bestBuy": 930000,
+      "bestSell": 1250000,
+      "spread": 25.6,
+      "margin": 25.933576990306705,
+      "profitPerUnit": 244800.00000000012,
+      "buyOrderCount": 25,
+      "sellOrderCount": 22
+    },
+    {
+      "typeId": 1987,
+      "typeName": "Signal Amplifier II",
+      "bestBuy": 600000,
+      "bestSell": 760000,
+      "spread": 21.052631578947366,
+      "margin": 18.679802955665046,
+      "profitPerUnit": 113760.00000000012,
+      "buyOrderCount": 30,
+      "sellOrderCount": 28
+    },
+    {
+      "typeId": 620,
+      "typeName": "Osprey",
+      "bestBuy": 7600000,
+      "bestSell": 9200000,
+      "spread": 17.391304347826086,
+      "margin": 13.419756287269912,
+      "profitPerUnit": 1035200.0000000009,
+      "buyOrderCount": 15,
+      "sellOrderCount": 20
+    },
+    {
+      "typeId": 2969,
+      "typeName": "720mm Howitzer Artillery II",
+      "bestBuy": 1380000,
+      "bestSell": 1560000,
+      "spread": 11.538461538461538,
+      "margin": 5.915613621760566,
+      "profitPerUnit": 82860.00000000023,
+      "buyOrderCount": 26,
+      "sellOrderCount": 25
+    },
+    {
+      "typeId": 24438,
+      "typeName": "Omnidirectional Tracking Link II",
+      "bestBuy": 530000,
+      "bestSell": 560000,
+      "spread": 5.357142857142857,
+      "margin": -1.0019518542615486,
+      "profitPerUnit": -5390.0,
+      "buyOrderCount": 28,
+      "sellOrderCount": 25
+    }
+  ],
+  "errors": []
+}

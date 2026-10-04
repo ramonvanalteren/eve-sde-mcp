@@ -1,0 +1,30 @@
+{
+  "characterName": "Eval Trader",
+  "count": 2,
+  "transactions": [
+    {
+      "transactionId": 6880000030,
+      "date": "2026-10-01T12:00:00Z",
+      "typeName": "Osprey",
+      "typeId": 620,
+      "quantity": 1,
+      "unitPrice": 9150000,
+      "total": 9150000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000030
+    },
+    {
+      "transactionId": 6880000011,
+      "date": "2026-09-29T12:00:00Z",
+      "typeName": "Osprey",
+      "typeId": 620,
+      "quantity": 1,
+      "unitPrice": 7695000,
+      "total": 7695000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000011
+    }
+  ]
+}

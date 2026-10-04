@@ -1,0 +1,54 @@
+{
+  "characterName": "Eval Trader",
+  "count": 4,
+  "transactions": [
+    {
+      "transactionId": 6880000019,
+      "date": "2026-10-01T10:00:00Z",
+      "typeName": "Badger",
+      "typeId": 648,
+      "quantity": 35,
+      "unitPrice": 705600,
+      "total": 24696000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000019
+    },
+    {
+      "transactionId": 6880000031,
+      "date": "2026-10-01T08:00:00Z",
+      "typeName": "Badger",
+      "typeId": 648,
+      "quantity": 20,
+      "unitPrice": 1650000,
+      "total": 33000000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000031
+    },
+    {
+      "transactionId": 6880000032,
+      "date": "2026-09-22T08:00:00Z",
+      "typeName": "Badger",
+      "typeId": 648,
+      "quantity": 18,
+      "unitPrice": 1620000,
+      "total": 29160000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000032
+    },
+    {
+      "transactionId": 6880000020,
+      "date": "2026-09-14T11:00:00Z",
+      "typeName": "Badger",
+      "typeId": 648,
+      "quantity": 38,
+      "unitPrice": 1354000,
+      "total": 51452000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000020
+    }
+  ]
+}

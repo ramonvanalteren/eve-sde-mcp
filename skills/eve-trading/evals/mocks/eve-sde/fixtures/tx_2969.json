@@ -1,0 +1,42 @@
+{
+  "characterName": "Eval Trader",
+  "count": 3,
+  "transactions": [
+    {
+      "transactionId": 6880000024,
+      "date": "2026-10-03T09:00:00Z",
+      "typeName": "720mm Howitzer Artillery II",
+      "typeId": 2969,
+      "quantity": 20,
+      "unitPrice": 1555000,
+      "total": 31100000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000024
+    },
+    {
+      "transactionId": 6880000009,
+      "date": "2026-10-02T11:00:00Z",
+      "typeName": "720mm Howitzer Artillery II",
+      "typeId": 2969,
+      "quantity": 10,
+      "unitPrice": 1395000,
+      "total": 13950000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000009
+    },
+    {
+      "transactionId": 6880000010,
+      "date": "2026-09-30T16:30:00Z",
+      "typeName": "720mm Howitzer Artillery II",
+      "typeId": 2969,
+      "quantity": 10,
+      "unitPrice": 1390000,
+      "total": 13900000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000010
+    }
+  ]
+}
