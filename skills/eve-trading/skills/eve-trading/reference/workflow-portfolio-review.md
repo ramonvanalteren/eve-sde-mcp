@@ -3,12 +3,49 @@
 A plain "portfolio review" request runs Workflows 2–5 together in this order by default. Equal rigor throughout — Workflow 3 in particular has been a repeated source of real errors when treated as an afterthought. Verify every margin figure with the [two-call procedure in margin-verification.md](margin-verification.md).
 
 ## Contents
+- [Report skeleton and pre-send checklist](#report-skeleton-and-pre-send-checklist)
 - [Workflow 2 — Buy portfolio review (kill / increase / hold)](#workflow-2--buy-portfolio-review-kill--increase--hold)
 - [Workflow 3 — Sell portfolio review (real cost basis, not generic margin)](#workflow-3--sell-portfolio-review-real-cost-basis-not-generic-margin)
 - [Workflow 4 — Inventory risk — mandatory on every portfolio review](#workflow-4--inventory-risk--mandatory-on-every-portfolio-review)
 - [Workflow 5 — Pipeline performance (default synthesis step)](#workflow-5--pipeline-performance-default-synthesis-step)
 - [Repricing rule of thumb](#repricing-rule-of-thumb-for-the-users-own-reference--not-a-claude-monitoring-task)
 - [Broker fee churn vs. legitimate growth](#broker-fee-churn-vs-legitimate-growth--dont-conflate-them)
+
+## Report skeleton and pre-send checklist
+
+The review has drifted from the agreed format more than once. Start from this skeleton, fill every section in order, and run the checklist before sending. A section with nothing to report still appears, with one line saying so — Workflow 4 in particular is mandatory.
+
+```
+Portfolio review — <date, UTC time>
+Snapshot: wallet <…> | buys <n> / sells <n> | buy escrow <…> (avg <…> per order) | tier mix T1 <%> / T2 <%> / T3 <%>
+          | escrow in orders with no fills <…> | since last review: <…>
+
+Workflow 2 — Buy portfolio
+  Kill                    Item | Order price | Left/total | Live margin | Why | ISK freed
+  Increase                Item | Left/total | Live margin | Suggested add (units × price) | Velocity basis
+  Hold, converting        Item | Price | Left/total | Live margin | Fills in window        (sorted by fills)
+  Hold, no or few fills   Item | Price | Left/total | Live margin | Escrow | Note           (sorted by escrow)
+  Hold, too early         Item | Price | Units | Margin | Escrow
+  Consolidation candidates: one line, labelled user-directed (above the floor, not a breach)
+
+Workflow 3 — Sell portfolio      Item | Held units | Bounded avg cost | Achievable net sell | Real margin | Verdict
+Workflow 4 — Inventory risk      Item | Uncovered units | Rough ISK value | Recommendation
+Workflow 5 — Pipeline            the 2-3 clearest outliers with the capital-efficiency read, or one line saying none stand out
+```
+
+```
+Pre-send checklist:
+- [ ] Every margin is the two-call figure at the competitive bid — never the tool's own `margin` field
+- [ ] `isBuyOrder` and `escrow` confirmed before any buy-side verdict; sell-only items went to Workflow 3
+- [ ] Buy orders grouped by their own `locationId`
+- [ ] Every zero-fill Kill checked for order age against fill history (not `issued`) and for jump-range competition
+- [ ] Every Increase passed the runway check
+- [ ] Every Kill and Increase shows units and ISK
+- [ ] Hold tables sorted as specified; too-early orders kept out of the no-fills table
+- [ ] Workflow 3 held units include unlisted hangar stock; cost basis is the bounded average
+- [ ] Workflow 4 section present
+- [ ] Snapshot line includes the order count, tier mix and the no-fill escrow share
+```
 
 ## Workflow 2 — Buy portfolio review (kill / increase / hold)
 
@@ -34,7 +71,7 @@ A plain "portfolio review" request runs Workflows 2–5 together in this order b
    4. **Hold, no or few fills** — 0-1 fills in the lookback window, or remaining volume that would take more than about a week at the observed fill pace: item | price | left/total | live margin | escrow | note. Sort by escrow, largest first. The note says why the slot is weak: how many days of the whole market's volume the order represents (units ÷ A4E trades/day), thin A4E trades/day, or the jump-range result from step 4.
    5. **Hold, too early to judge** — a short table (item | price | units | margin | escrow) for orders placed or repriced in roughly the last 24h with no fills yet. Keep them out of table 4: a brand-new order with zero fills is not a signal. `issued` resets on every reprice, so corroborate age against fill history and earlier snapshots before placing an order in table 4 or here.
 
-   After the tables, if table 4 contains weak slots that still clear the 10% floor, add one **Consolidation candidates** line naming the worst profit-per-slot orders and the total escrow they would free. Label it explicitly as user-directed consolidation (above the floor, not a floor breach) in line with the user's preference for larger positions on items that cycle; never fold these into the Kill table. Also name any orders under the profit-per-slot floor (SKILL.md, "Slot discipline"). Order count alone is not a reason to cut — the user has said 40-60 open buys is fine. To turn the cut list into a full rebalance, see kill-and-redeploy mode in [capital-allocation.md](capital-allocation.md). Size every Kill and Increase per the sizing rule in SKILL.md.
+   After the tables, if table 4 contains weak slots that still clear the 10% floor, add one **Consolidation candidates** line naming the worst profit-per-slot orders and the total escrow they would free. Label it explicitly as user-directed consolidation (above the floor, not a floor breach) in line with the user's preference for larger positions on items that cycle; never fold these into the Kill table. Also name any orders under the profit-per-slot floor (SKILL.md, "Slot discipline"). Order count alone is not a reason to cut — the user has said the comfortable order range is fine (strategy.md). To turn the cut list into a full rebalance, see kill-and-redeploy mode in [capital-allocation.md](capital-allocation.md). Size every Kill and Increase per the sizing rule in SKILL.md.
 
 ## Workflow 3 — Sell portfolio review (real cost basis, not generic margin)
 
