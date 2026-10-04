@@ -1,6 +1,6 @@
-# Strategy — few large, well-cycling positions, sized to the market
+# Strategy — larger positions on items that actually cycle, sized to the market
 
-The standing strategy this skill runs for hybrid station trading. It was set by user direction over 30 Sep – 4 Oct 2026, and this file is the single place its parameters and the evidence behind them live — other files point here instead of repeating numbers. Read it when proposing positions, judging the book's shape, or answering "is the strategy working?".
+The standing strategy this skill runs for hybrid station trading. It was set by user direction over 30 Sep – 4 Oct 2026. This file is the **single source of truth for the strategy parameters** (the block under "Parameters", which `scripts/size_positions.py` reads) and holds the evidence behind them; other files refer to the parameters by name instead of repeating values. Read it when proposing positions, judging the book's shape, or answering "is the strategy working?".
 
 ## Contents
 - [The strategy in six lines](#the-strategy-in-six-lines)
@@ -12,8 +12,8 @@ The standing strategy this skill runs for hybrid station trading. It was set by 
 
 ## The strategy in six lines
 
-1. **Larger positions on items that actually cycle** — not many small or idle ones. A slot has to earn its place: judge profit per slot (floor 10M per cycle) and conversion, not margin alone. The order count itself is not capped; 40–60 open buys is fine.
-2. **Size to the market, not the wallet**: units = 25–50% of the item's average daily trade count (trades, not ISK/day).
+1. **Larger positions on items that actually cycle** — not many small or idle ones. A slot has to earn its place: judge profit per slot (the profit-per-slot floor) and conversion, not margin alone. The order count itself is not capped; the comfortable order range is in the parameter block.
+2. **Size to the market, not the wallet**: units = the sizing band of the item's average daily trade count (trades, not ISK/day).
 3. **Rank by M/1M/day.** Margin is a floor test, total profit is a displayed column and a slot filter.
 4. **Keep capital working.** Periodically kill idle or thin positions and redeploy the freed capital ([kill-and-redeploy mode](capital-allocation.md)). Don't hoard cash, least of all before a weekend.
 5. **Report the tier mix** (T1/T2/T3 share of buy escrow) every time. T3 has been the weakest per ISK deployed, but the mix is report-only: no target, no flag.
@@ -21,20 +21,43 @@ The standing strategy this skill runs for hybrid station trading. It was set by 
 
 ## Parameters
 
-| Parameter | Value | Status | Enforced by |
-|---|---|---|---|
-| Sizing band | 25–50% of daily trades | User-set 2026-10-02 (was 15–25%) | `size_positions.py` `trade_share_band` |
-| Rank key | M/1M/day, descending | User-set 2026-10-02 | `rank_by="yield"` |
-| Unit increment | multiples of 5 | User-set | `unit_increment` |
-| Thin-item exclusion | if the minimum 5 units exceeds 50% of daily trades (under ~10 trades/day), don't open it | Follows from the band | `size_positions.py` |
-| Entry floors | T1 10% / T2 11% / T3 13% (T3 10% with the liquidity carve-out) | User-set 2026-09-23 | [margin-verification.md](margin-verification.md) |
-| Hold floor | 10% flat, all tiers | User-set 2026-09-23 | margin-verification.md |
-| Buffer | The user's most recently stated figure (250M on 2026-10-02, 400M on 2026-10-04). If none was stated, ask. | Per request | `buffer_target_isk` |
-| Open-buy-order count | **No cap**; 40–60 open buys is fine | User-set 2026-10-04 (supersedes the 2 Oct request to cut ~40 orders) | Reported, not enforced: `max_open_orders=None`; the script adds a note only above 60 |
-| Minimum profit per slot | **10M per full cycle** at the live margin, soft flag | User-set 2026-10-04 (set at 5M, raised to 10M later the same day) | `min_profit_per_slot` |
-| Tier mix | **Report only** — no target, no flag | User-set 2026-10-04 | `current_tier_escrow` (printed, not flagged) |
+The block between the markers is machine-read: `size_positions.py` loads its defaults from it, and the tests in `skills/eve-trading/tests/` check that nothing else in the skill repeats these values. Change a value here and nowhere else. Tier boundaries are in ISK per unit; a `null` limit means "none". (The unit increment is also worded into SKILL.md's sizing rule — "multiples of 5" — so keep those two in step; the tests don't cover it.)
 
-"Soft" means flag it and name the rows — never silently block, drop or resize. The profit-per-slot floor is the only limit left: there is no order cap and no tier flag. All values above are user-set; if the user changes one, update this table and the matching default in `size_positions.py` together.
+<!-- strategy-params:begin -->
+```json
+{
+  "sizing_band_pct_of_daily_trades": [25, 50],
+  "unit_increment": 5,
+  "rank_by": "yield",
+  "min_profit_per_slot_isk": 10000000,
+  "comfortable_order_range": [40, 60],
+  "max_open_orders": null,
+  "t3_share_flag_pct": null,
+  "fewer_orders_variant_profit_share": 0.67,
+  "tiers_isk_per_unit": {
+    "T1": [500000, 5000000],
+    "T2": [5000000, 20000000],
+    "T3": [20000000, 50000000]
+  }
+}
+```
+<!-- strategy-params:end -->
+
+| Parameter | Meaning | Set by the user | Enforced by |
+|---|---|---|---|
+| `sizing_band_pct_of_daily_trades` | Units as a share of the item's average daily trade count. Above the ceiling a row is flagged OVER-BAND; if the minimum increment alone exceeds the ceiling the item is excluded as thin. | 2026-10-02 (raised from a lower band) | `size_positions.py` |
+| `unit_increment` | Positions are sized in multiples of this many units. | Earlier | `size_positions.py` |
+| `rank_by` | `yield` = M/1M/day, descending. Margin is only a floor test. | 2026-10-02 | `size_positions.py` |
+| `min_profit_per_slot_isk` | Soft floor on total profit per full cycle at the live margin; rows below are flagged SMALL-SLOT, never dropped. | 2026-10-04 | `size_positions.py` |
+| `comfortable_order_range` | The open-buy count the user is comfortable with. There is no cap: the count is reported, and the script adds a note only above the top of the range. | 2026-10-04 (supersedes the 2 Oct request to cut the count) | reported only |
+| `max_open_orders` | A hard-ish cap if the user ever wants one; `null` = none. | 2026-10-04 (no cap) | `size_positions.py` |
+| `t3_share_flag_pct` | Flag when T3's share of escrow exceeds this; `null` = report only. | 2026-10-04 (report only) | `size_positions.py` |
+| `fewer_orders_variant_profit_share` | The fewer-orders variant keeps the shortest ranked prefix holding this share of the profit. Two thirds because on the 4 Oct plan the top 9 of 16 rows held 68% of the profit for 53% of the capital. | Skill default | `size_positions.py` |
+| `tiers_isk_per_unit` | Tier boundaries by unit price (the price paid per unit at Perimeter), matching the three saved A4E URLs. Below the T1 floor is "micro", above the T3 ceiling is "T4+". | Earlier | `size_positions.py` |
+
+Margin floors (entry by tier, flat hold floor) are not here — they live in [margin-verification.md](margin-verification.md). The buffer is not a parameter: it is the figure the user most recently stated, in ISK, for the request at hand (250M on 2026-10-02, 400M on 2026-10-04); if none was stated, ask.
+
+"Soft" means flag it and name the rows — never silently block, drop or resize. The profit-per-slot floor is the only limit left: there is no order cap and no tier flag.
 
 **Decisions and context** (so they can be revisited):
 - **No order cap.** On 2 Oct the book held about 40 buys against 15 sells (35 buys, 4.07B of escrow, many idle for days) and the user asked to cut the count. On 4 Oct, asked about a cap, the user said no cap and that 40–60 is fine. The skill therefore polices slot *quality* — the profit floor, and Workflow 2's zero-fill and thin-position reporting — rather than slot count. The count is still reported in every snapshot and proposal.
@@ -43,7 +66,7 @@ The standing strategy this skill runs for hybrid station trading. It was set by 
 
 ## Tier definitions
 
-By **unit cost** (the price paid per unit at Perimeter), matching the three saved A4E URLs: **T1** 0.5–5M, **T2** 5–20M, **T3** 20–50M. Below 0.5M is "micro", above 50M is "T4+". The mix is each tier's share of open **buy escrow**. `size_positions.py` computes it from unit prices.
+Tiers are by **unit cost** — the boundaries are `tiers_isk_per_unit` in the parameter block, matching the three saved A4E URLs. The mix is each tier's share of open **buy escrow**; `size_positions.py` computes it from unit prices.
 
 ## Dated findings — evidence, not rules
 

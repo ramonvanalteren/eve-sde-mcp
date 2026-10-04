@@ -13,8 +13,10 @@ This exists because the same sizing/running-total/buffer-check logic has
 been hand-rewritten inline many times across trading sessions — pulling it
 into one script removes that repetition and the chance of an arithmetic
 slip landing in front of the user. The strategy parameters it enforces
-(sizing band, slot floor, order cap, T3 share flag) are defined in
-reference/strategy.md; the defaults below mirror that table.
+(sizing band, profit-per-slot floor, comfortable order range, tier
+boundaries, ...) are read from the JSON block in reference/strategy.md — the
+single source of truth — and printed at the top of every run. Pass a keyword
+argument to override one for a single run.
 
 Usage as a library (called from a short Python snippet inside the session):
 
@@ -50,20 +52,19 @@ disguise; this folds in how often the trade can repeat. Other keys:
 (True -> "profit", False -> "input") but is superseded by `rank_by`.
 
 Yield-ranking alone favours cheap, fast items whose slots earn little per
-cycle, which cuts against "fewer, larger positions" — so the slot floor
-(`min_profit_per_slot`, default 10M) flags rows whose total profit per full
-cycle is below the floor — flagged, never dropped.
+cycle, so the profit-per-slot floor (`min_profit_per_slot`) flags rows whose
+total profit per full cycle is below it — flagged, never dropped.
 
-**Units are rounded to the nearest multiple of 5 (minimum 5)** before
-costing. Total profit is computed from the rounded unit count and ranking
+**Units are rounded to the nearest multiple of the unit increment (minimum
+one increment; 5 at the time of writing)** before costing. Total profit is computed from the rounded unit count and ranking
 happens after rounding. The script never silently shrinks a unit count to fit
 a budget.
 
 **Sizing band.** Each row shows its units as a share of the item's daily
-trade count. Rows above `trade_share_band[1]` (default 50%) are flagged
-OVER-BAND. A row whose *minimum* size (one increment, 5 units) already
-exceeds the band ceiling is a thin item and is excluded outright (reported
-in `excluded_reasons`) — that is the thin-T3 exclusion. Trades/day <= 0 means
+trade count. Rows above the band ceiling (`trade_share_band[1]`) are flagged
+OVER-BAND. A row whose *minimum* size (one increment) already exceeds the
+band ceiling is a thin item and is excluded outright (reported in
+`excluded_reasons`) — that is the thin-T3 exclusion. Trades/day <= 0 means
 "unknown" and skips the share check.
 
 **Capital.** `wallet` is cash now; `freed` is the escrow the Kill list would
@@ -73,35 +74,87 @@ against is wallet + freed. The buffer is `buffer_target_isk` if given
 `stop_at_buffer` is True (default) rows that would breach the buffer are
 excluded and reported.
 
-**Slot discipline.** There is no cap on open buy orders (the user said 40-60
-is fine; `max_open_orders` exists but defaults to None). Pass
-`current_open_orders` (the count after any assumed Kills) to print the order
-count after the adds; a note appears only if it lands above `order_range[1]`
-(60). Pass `current_tier_escrow` ({"T1":..,"T2":..,"T3":..} in ISK, after
-assumed Kills) to print the T1/T2/T3 escrow shares before and after; tiers
-are by unit price (T1 0.5-5M, T2 5-20M, T3 20-50M). The tier mix is
-report-only — `t3_share_flag_pct` defaults to None (no flag). The summary
-also prints the fewer-orders variant: the shortest prefix of the ranked list
-that holds `variant_profit_share` (default two thirds) of the total profit.
+**Slot discipline.** There is no cap on open buy orders (`max_open_orders`
+exists but is null in strategy.md). Pass `current_open_orders` (the count
+after any assumed Kills) to print the order count after the adds; a note
+appears only if it lands above the top of the comfortable order range
+(`order_range[1]`). Pass `current_tier_escrow` ({"T1":..,"T2":..,"T3":..} in
+ISK, after assumed Kills) to print the T1/T2/T3 escrow shares before and
+after; tiers are by unit price (boundaries in strategy.md). The tier mix is
+report-only unless `t3_share_flag_pct` is set. The summary also prints the
+fewer-orders variant: the shortest prefix of the ranked list that holds
+`variant_profit_share` of the total profit.
 """
 
 from __future__ import annotations
 
-TIER_BOUNDS = [
-    (0, 500_000, "micro"),
-    (500_000, 5_000_000, "T1"),
-    (5_000_000, 20_000_000, "T2"),
-    (20_000_000, 50_000_000, "T3"),
-    (50_000_000, float("inf"), "T4+"),
-]
+import json
+import re
+from pathlib import Path
+
+PARAMS_FILE = Path(__file__).resolve().parent.parent / "reference" / "strategy.md"
+_PARAMS_BLOCK = re.compile(
+    r"<!--\s*strategy-params:begin\s*-->\s*```json\s*(.*?)\s*```\s*<!--\s*strategy-params:end\s*-->", re.S
+)
+_REQUIRED_PARAMS = {
+    "sizing_band_pct_of_daily_trades",
+    "unit_increment",
+    "rank_by",
+    "min_profit_per_slot_isk",
+    "comfortable_order_range",
+    "max_open_orders",
+    "t3_share_flag_pct",
+    "fewer_orders_variant_profit_share",
+    "tiers_isk_per_unit",
+}
+
+
+def load_params(path: Path = PARAMS_FILE) -> dict:
+    """Read the strategy parameter block from reference/strategy.md (the single source of truth)."""
+    restore = "The skill is version-controlled in eve-sde-mcp — restore reference/strategy.md from git history."
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Cannot read the strategy parameters at {path}: {exc}. {restore}") from exc
+    match = _PARAMS_BLOCK.search(text)
+    if not match:
+        raise RuntimeError(f"No <!-- strategy-params:begin --> JSON block found in {path}. {restore}")
+    try:
+        params = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"The strategy-params block in {path} is not valid JSON: {exc}") from exc
+    missing = sorted(_REQUIRED_PARAMS - params.keys())
+    if missing:
+        raise RuntimeError(f"The strategy-params block in {path} is missing: {', '.join(missing)}")
+    tiers = params["tiers_isk_per_unit"]
+    if not (tiers["T1"][1] == tiers["T2"][0] and tiers["T2"][1] == tiers["T3"][0]):
+        raise RuntimeError("tiers_isk_per_unit must be contiguous (T1 ceiling = T2 floor, T2 ceiling = T3 floor)")
+    return params
+
+
+PARAMS = load_params()
+
+
+def _tier_bounds(params: dict) -> list:
+    t = params["tiers_isk_per_unit"]
+    bounds = [(0, t["T1"][0], "micro")]
+    bounds += [(t[name][0], t[name][1], name) for name in ("T1", "T2", "T3")]
+    bounds.append((t["T3"][1], float("inf"), "T4+"))
+    return bounds
+
+
+TIER_BOUNDS = _tier_bounds(PARAMS)
 
 
 def tier_of(unit_price: float) -> str:
-    """Tier by unit price: T1 0.5-5M, T2 5-20M, T3 20-50M (micro below, T4+ above)."""
+    """Tier by unit price per the strategy.md boundaries ("micro" below T1, "T4+" above T3)."""
     for low, high, name in TIER_BOUNDS:
         if low <= unit_price < high:
             return name
     return "T4+"
+
+
+_UNSET = object()  # "use the strategy.md value" — distinct from an explicit None (= disabled)
 
 
 def _round_to_increment(units: int, increment: int = 5) -> int:
@@ -129,23 +182,25 @@ def size_positions(
     wallet: float,
     buffer_target_pct: float = 10.0,
     stop_at_buffer: bool = True,
-    unit_increment: int = 5,
-    rank_by: str = "yield",
+    unit_increment=_UNSET,
+    rank_by=_UNSET,
     rank_by_profit: bool | None = None,
     freed: float = 0.0,
     buffer_target_isk: float | None = None,
-    trade_share_band: tuple[float, float] = (25.0, 50.0),
-    min_profit_per_slot: float | None = 10_000_000,
+    trade_share_band=_UNSET,
+    min_profit_per_slot=_UNSET,
     current_open_orders: int | None = None,
-    max_open_orders: int | None = None,
-    order_range: tuple[int, int] = (40, 60),
+    max_open_orders=_UNSET,
+    order_range=_UNSET,
     current_tier_escrow: dict | None = None,
-    t3_share_flag_pct: float | None = None,
-    variant_profit_share: float = 2 / 3,
+    t3_share_flag_pct=_UNSET,
+    variant_profit_share=_UNSET,
 ) -> dict:
     """
     Print the required sizing table plus the slot-discipline summary and
-    return a summary dict.
+    return a summary dict. Every limit left at its default comes from the
+    strategy.md parameter block; pass a keyword to override it for one run
+    (an explicit None disables a limit that allows it).
 
     candidates: (name, unit_price, units, margin_pct, trades_per_day,
         profit_per_unit, note) tuples; `units` is rounded to the nearest
@@ -164,19 +219,30 @@ def size_positions(
     min_profit_per_slot: soft floor on total profit per full cycle; rows
         below it are flagged SMALL-SLOT (not excluded). None disables.
     current_open_orders: order count after assumed Kills; the summary prints
-        the count after the adds, with a note only if it exceeds
-        order_range[1]. max_open_orders is an optional hard-ish cap (default
-        None = no cap).
+        the count after the adds, with a note only if it exceeds the top of
+        `order_range` (the comfortable range). max_open_orders is an optional
+        cap (null in strategy.md = no cap).
     current_tier_escrow: escrow by tier after assumed Kills, for the
         before/after mix (report-only). t3_share_flag_pct, if set, flags a
-        T3 share above that percent; default None = no flag.
+        T3 share above that percent; None = no flag.
     variant_profit_share: fraction of total profit the fewer-orders variant
         must retain.
 
-    Returns a dict with: rows, total, total_profit, buffer, buffer_pct, pool,
-    excluded (names), excluded_reasons (name -> reason), small_slot (names),
-    over_band (names), order_count_after, tier_mix_after, variant.
+    Returns a dict with: parameters (the resolved limits used), rows, total,
+    total_profit, buffer, buffer_pct, pool, excluded (names),
+    excluded_reasons (name -> reason), small_slot (names), over_band (names),
+    order_count_after, tier_mix_after, variant.
     """
+    unit_increment = PARAMS["unit_increment"] if unit_increment is _UNSET else unit_increment
+    rank_by = PARAMS["rank_by"] if rank_by is _UNSET else rank_by
+    trade_share_band = tuple(PARAMS["sizing_band_pct_of_daily_trades"]) if trade_share_band is _UNSET else trade_share_band
+    min_profit_per_slot = PARAMS["min_profit_per_slot_isk"] if min_profit_per_slot is _UNSET else min_profit_per_slot
+    max_open_orders = PARAMS["max_open_orders"] if max_open_orders is _UNSET else max_open_orders
+    order_range = tuple(PARAMS["comfortable_order_range"]) if order_range is _UNSET else order_range
+    t3_share_flag_pct = PARAMS["t3_share_flag_pct"] if t3_share_flag_pct is _UNSET else t3_share_flag_pct
+    variant_profit_share = (
+        PARAMS["fewer_orders_variant_profit_share"] if variant_profit_share is _UNSET else variant_profit_share
+    )
     if rank_by_profit is not None:
         rank_by = "profit" if rank_by_profit else "input"
     if rank_by not in ("yield", "profit", "input"):
@@ -208,6 +274,13 @@ def size_positions(
     elif rank_by == "profit":
         prepared.sort(key=lambda row: row[6], reverse=True)
 
+    floor_txt = f"{min_profit_per_slot / 1e6:g}M" if min_profit_per_slot is not None else "off"
+    print(
+        f"Parameters (reference/strategy.md): band {band_low:g}-{band_high:g}% of daily trades | "
+        f"increment {unit_increment} | rank by {rank_by} | profit-per-slot floor {floor_txt} | "
+        f"comfortable orders {order_range[0]}-{order_range[1]}"
+        + (f" | order cap {max_open_orders}" if max_open_orders is not None else "")
+    )
     header = (
         f"{'Item':50s} {'Unit price':>13s} {'Units':>6s} {'Cost':>14s} "
         f"{'Margin':>7s} {'Trades/d':>9s} {'Total profit':>14s} {'M/1M/day':>10s}  Running"
@@ -351,6 +424,16 @@ def size_positions(
             print(f"  - {name}: {excluded_reasons[name]}")
 
     return {
+        "parameters": {
+            "unit_increment": unit_increment,
+            "rank_by": rank_by,
+            "trade_share_band": tuple(trade_share_band),
+            "min_profit_per_slot": min_profit_per_slot,
+            "max_open_orders": max_open_orders,
+            "order_range": tuple(order_range),
+            "t3_share_flag_pct": t3_share_flag_pct,
+            "variant_profit_share": variant_profit_share,
+        },
         "rows": included,
         "total": running,
         "total_profit": running_profit,
@@ -370,8 +453,9 @@ def size_positions(
 if __name__ == "__main__":
     # Smoke test / usage example (illustrative figures). The thin row is
     # excluded outright (5 units = 63% of 8 trades/day), the cheap filler row
-    # is flagged SMALL-SLOT (about 1M per cycle against the 10M floor, as is the
-    # cheap fast row at 8.4M), and the tier mix / order count lines print.
+    # is flagged SMALL-SLOT (about 1M per cycle, as is the cheap fast row at
+    # 8.4M, both under the profit-per-slot floor), and the tier mix / order
+    # count lines print.
     example_candidates = [
         ("Corpum C-Type Medium Energy Nosferatu", 8428000, 10, 49.2, 22, 4167000, "deep book"),
         ("Moa", 8239000, 15, 24.2, 39, 2004000, "thin top asks"),
