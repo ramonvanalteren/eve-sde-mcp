@@ -1,0 +1,102 @@
+{
+  "characterName": "Eval Trader",
+  "count": 8,
+  "transactions": [
+    {
+      "transactionId": 6880000021,
+      "date": "2026-10-03T23:10:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 60,
+      "unitPrice": 742000,
+      "total": 44520000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000021
+    },
+    {
+      "transactionId": 6880000004,
+      "date": "2026-10-03T22:15:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 40,
+      "unitPrice": 614000,
+      "total": 24560000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000004
+    },
+    {
+      "transactionId": 6880000022,
+      "date": "2026-10-03T12:00:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 50,
+      "unitPrice": 745000,
+      "total": 37250000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000022
+    },
+    {
+      "transactionId": 6880000005,
+      "date": "2026-10-03T08:30:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 20,
+      "unitPrice": 614000,
+      "total": 12280000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000005
+    },
+    {
+      "transactionId": 6880000023,
+      "date": "2026-10-02T22:00:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 30,
+      "unitPrice": 741000,
+      "total": 22230000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000023
+    },
+    {
+      "transactionId": 6880000006,
+      "date": "2026-10-02T20:00:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 35,
+      "unitPrice": 614000,
+      "total": 21490000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000006
+    },
+    {
+      "transactionId": 6880000007,
+      "date": "2026-10-02T09:45:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 15,
+      "unitPrice": 614000,
+      "total": 9210000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000007
+    },
+    {
+      "transactionId": 6880000008,
+      "date": "2026-10-01T18:20:00Z",
+      "typeName": "Signal Amplifier II",
+      "typeId": 1987,
+      "quantity": 30,
+      "unitPrice": 614000,
+      "total": 18420000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000008
+    }
+  ]
+}

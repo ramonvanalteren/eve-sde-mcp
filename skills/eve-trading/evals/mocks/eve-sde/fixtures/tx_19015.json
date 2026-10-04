@@ -1,0 +1,78 @@
+{
+  "characterName": "Eval Trader",
+  "count": 6,
+  "transactions": [
+    {
+      "transactionId": 6880000025,
+      "date": "2026-10-03T15:00:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 4,
+      "unitPrice": 36400000,
+      "total": 145600000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000025
+    },
+    {
+      "transactionId": 6880000012,
+      "date": "2026-10-03T10:00:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 2,
+      "unitPrice": 27500000,
+      "total": 55000000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000012
+    },
+    {
+      "transactionId": 6880000026,
+      "date": "2026-10-02T10:00:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 4,
+      "unitPrice": 36300000,
+      "total": 145200000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000026
+    },
+    {
+      "transactionId": 6880000013,
+      "date": "2026-10-01T15:30:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 2,
+      "unitPrice": 27500000,
+      "total": 55000000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000013
+    },
+    {
+      "transactionId": 6880000014,
+      "date": "2026-09-20T13:00:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 2,
+      "unitPrice": 27500000,
+      "total": 55000000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000014
+    },
+    {
+      "transactionId": 6880000015,
+      "date": "2026-09-12T17:45:00Z",
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "typeId": 19015,
+      "quantity": 2,
+      "unitPrice": 27500000,
+      "total": 55000000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000015
+    }
+  ]
+}

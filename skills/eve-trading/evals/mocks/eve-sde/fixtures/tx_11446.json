@@ -1,0 +1,66 @@
+{
+  "characterName": "Eval Trader",
+  "count": 5,
+  "transactions": [
+    {
+      "transactionId": 6880000027,
+      "date": "2026-10-03T16:00:00Z",
+      "typeName": "Graviton Physics",
+      "typeId": 11446,
+      "quantity": 10,
+      "unitPrice": 1248000,
+      "total": 12480000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000027
+    },
+    {
+      "transactionId": 6880000028,
+      "date": "2026-10-03T08:00:00Z",
+      "typeName": "Graviton Physics",
+      "typeId": 11446,
+      "quantity": 5,
+      "unitPrice": 1245000,
+      "total": 6225000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000028
+    },
+    {
+      "transactionId": 6880000016,
+      "date": "2026-10-02T12:00:00Z",
+      "typeName": "Graviton Physics",
+      "typeId": 11446,
+      "quantity": 5,
+      "unitPrice": 935000,
+      "total": 4675000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000016
+    },
+    {
+      "transactionId": 6880000017,
+      "date": "2026-09-25T09:00:00Z",
+      "typeName": "Graviton Physics",
+      "typeId": 11446,
+      "quantity": 5,
+      "unitPrice": 935000,
+      "total": 4675000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000017
+    },
+    {
+      "transactionId": 6880000018,
+      "date": "2026-09-18T14:00:00Z",
+      "typeName": "Graviton Physics",
+      "typeId": 11446,
+      "quantity": 5,
+      "unitPrice": 935000,
+      "total": 4675000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000018
+    }
+  ]
+}

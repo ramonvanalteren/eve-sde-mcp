@@ -1,0 +1,109 @@
+{
+  "locationId": 1044752365771,
+  "regionId": 10000002,
+  "salesTaxPct": 3.4,
+  "brokerFeePct": 0.5,
+  "itemCount": 9,
+  "items": [
+    {
+      "typeId": 19107,
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "bestBuy": 8428000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 22,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 1987,
+      "typeName": "Signal Amplifier II",
+      "bestBuy": 614300,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 41,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 2969,
+      "typeName": "720mm Howitzer Artillery II",
+      "bestBuy": 1395000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 30,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 620,
+      "typeName": "Osprey",
+      "bestBuy": 7695000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 18,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 34282,
+      "typeName": "Polarized Neutron Blaster Cannon",
+      "bestBuy": 13820000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 17,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 19015,
+      "typeName": "Coreli A-Type Small Armor Repairer",
+      "bestBuy": 27640000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 16,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 11446,
+      "typeName": "Graviton Physics",
+      "bestBuy": 941000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 35,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 648,
+      "typeName": "Badger",
+      "bestBuy": 700000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 10,
+      "sellOrderCount": 0
+    },
+    {
+      "typeId": 24438,
+      "typeName": "Omnidirectional Tracking Link II",
+      "bestBuy": 540000,
+      "bestSell": null,
+      "spread": null,
+      "margin": null,
+      "profitPerUnit": null,
+      "buyOrderCount": 30,
+      "sellOrderCount": 0
+    }
+  ],
+  "errors": []
+}

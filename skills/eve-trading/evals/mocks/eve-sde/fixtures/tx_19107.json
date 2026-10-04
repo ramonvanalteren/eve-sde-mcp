@@ -1,0 +1,54 @@
+{
+  "characterName": "Eval Trader",
+  "count": 4,
+  "transactions": [
+    {
+      "transactionId": 6880000029,
+      "date": "2026-10-03T20:00:00Z",
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "typeId": 19107,
+      "quantity": 4,
+      "unitPrice": 11800000,
+      "total": 47200000,
+      "isBuy": false,
+      "locationId": 60003760,
+      "clientId": 2200000029
+    },
+    {
+      "transactionId": 6880000001,
+      "date": "2026-10-03T19:40:11Z",
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "typeId": 19107,
+      "quantity": 1,
+      "unitPrice": 8428000,
+      "total": 8428000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000001
+    },
+    {
+      "transactionId": 6880000002,
+      "date": "2026-10-02T14:10:03Z",
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "typeId": 19107,
+      "quantity": 2,
+      "unitPrice": 8428000,
+      "total": 16856000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000002
+    },
+    {
+      "transactionId": 6880000003,
+      "date": "2026-10-01T09:12:45Z",
+      "typeName": "Corpum C-Type Medium Energy Nosferatu",
+      "typeId": 19107,
+      "quantity": 1,
+      "unitPrice": 8420000,
+      "total": 8420000,
+      "isBuy": true,
+      "locationId": 1044752365771,
+      "clientId": 2100000003
+    }
+  ]
+}
