@@ -26,9 +26,16 @@ Capital allocation is not a numbered workflow; it has two modes, in [reference/c
 
 Buys go to **Perimeter - 0.0% Neutral States Market HQ** (`location_id 1044752365771`, 1 jump from Jita, placed with `range: "1"` so they still reach Jita 4-4 sellers); sells stay at **Jita 4-4 Caldari Navy Assembly Plant** (`location_id 60003760`) — a hybrid, not a relocation. Legacy buy orders may still sit at Jita 4-4: always check each order's own `locationId`. Fee rates, the margin formula, and the mandatory margin-verification procedure live in [reference/margin-verification.md](reference/margin-verification.md) — **read it before quoting any margin figure.**
 
-## The strategy, in one paragraph
+## The strategy in brief
 
-The book is run as **larger positions on items that actually cycle, sized to the market**: each position is a fixed share of the item's average daily trade count (the sizing band), candidates are ranked by M/1M/day, idle or thin positions are periodically killed and the freed capital redeployed (cash is not hoarded), the order count is reported but not capped, the T1/T2/T3 mix of buy escrow is reported every time, and the strategy is judged on realized P&L over at least a week — not on net worth. The parameter values — the single source of truth, read by `scripts/size_positions.py` — their provenance and the evidence behind them are in [reference/strategy.md](reference/strategy.md); **read it before proposing positions or judging the shape of the book.** Rules in this skill refer to parameters by name (the sizing band, the profit-per-slot floor, the comfortable order range) and never repeat the values.
+The book is run as **larger positions on items that actually cycle, sized to the market**:
+- each position is a fixed share of the item's average daily trade count (the sizing band);
+- candidates are ranked by M/1M/day;
+- idle or thin positions are periodically killed and the freed capital redeployed — cash is not hoarded;
+- the order count is reported but not capped, and the T1/T2/T3 mix of buy escrow is reported every time;
+- the strategy is judged on realized P&L over at least a week, not on net worth.
+
+The parameter values — the single source of truth, read by `scripts/size_positions.py` — their provenance and the evidence behind them are in [reference/strategy.md](reference/strategy.md); **read it before proposing positions or judging the shape of the book.** Rules here refer to parameters by name (the sizing band, the profit-per-slot floor, the comfortable order range) and never repeat the values.
 
 ## Dispatch map — which reference files to read
 
@@ -51,7 +58,11 @@ Every verdict that isn't a plain "Hold" — every new candidate, every Kill, eve
 
 Sizing method:
 1. Pull current wallet balance (`get_wallet_balance`) to know available capital. If any meaningful time has passed since it was last pulled in the conversation, refresh it again rather than reusing a stale figure — balances move fast when the user is actively executing on prior recommendations.
-2. **Size each position to the market, not to the wallet:** units = the sizing band, a share of the item's average daily trade count (A4E "avg daily trades", or `get_market_history`; band values in [reference/strategy.md](reference/strategy.md)). Count trades, not ISK/day — A4E's ISK/day swings several-fold between snapshots on T3 items. Use the top of the band for deep, durable books (100+ trades/day, 20+ orders on both sides) and the bottom for thinner ones; above the band ceiling the order parks escrow behind fills that won't come for days. **Thin-item exclusion:** if even the minimum increment would exceed the band ceiling, don't open it — that is the test that cut the thin T3 items. Don't hoard cash either: if the pool is bigger than the band can absorb, say so and report the leftover as buffer rather than inflating a position past the ceiling.
+2. **Size each position to the market, not to the wallet:** units = the sizing band, a share of the item's average daily trade count (A4E "avg daily trades" or `get_market_history`; values in [reference/strategy.md](reference/strategy.md)).
+   - Count trades, not ISK/day — A4E's ISK/day swings several-fold between snapshots on T3 items.
+   - Use the top of the band for deep, durable books (100+ trades/day, 20+ orders on both sides) and the bottom for thinner ones; above the ceiling the order parks escrow behind fills that won't come for days.
+   - **Thin-item exclusion:** if even the minimum increment would exceed the band ceiling, don't open it — the test that cut the thin T3 items.
+   - Don't hoard cash either: if the pool is bigger than the band can absorb, say so and report the leftover as buffer rather than inflating a position past the ceiling.
 3. **Size in increments of 5 or 10 units — never an odd one-off count like 3 or 7.** A position small enough to need an awkward unit count usually isn't worth the broker-fee overhead of opening and relisting it. There is generally enough capital available to round up to the next clean increment rather than shrink to fit a budget — prefer rounding up over sizing something oddly. `scripts/size_positions.py` (see step 7) now enforces this automatically by rounding whatever unit count you pass to the nearest multiple of 5, so lean on it rather than hand-picking an exact number.
 4. For **Kill**, state the ISK recovered: unit count × price × (freed escrow), so the user knows exactly what capital comes back.
 5. For **Increase**, suggest an incremental unit count and its ISK cost, sized against both remaining wallet capacity and the sizing band above — don't suggest doubling a position that only trades 12 units/day. New increments go to Perimeter HQ per the Workflow 2 execution note.
@@ -81,7 +92,11 @@ The script appends a trailing annotation to each row — the share of daily trad
 
 - **Trades/day**: the transaction count over the lookback period, from A4E's "avg daily trades" column or `get_market_history`.
 - **Total profit**: `profit_per_unit × rounded units` — the ISK profit for the position as actually sized.
-- **M/1M/day**: `(profit_per_unit / unit_price) × trades_per_day`, read as "M ISK of profit per day, per 1M ISK committed" — e.g. a value of 8.2 means 8.2M ISK/day of profit-earning-potential for every 1M ISK tied up. Deliberately kept in the same unit base (millions) on both sides rather than expressed as a percentage — "820%/day" reads like a literal compounding return and invites the wrong conclusion that the position doubles your money twice a day; "8.2M/1M/day" doesn't carry that implication. It's a velocity-adjusted capital-efficiency score, deliberately scale-independent (same value regardless of sized units) so it ranks *opportunities* rather than restating the sized position. This is **not** the same thing as plain profit ÷ capital invested — that ratio is just margin % wearing a different hat and adds nothing new. M/1M/day is what gives the Workflow 5 "a slow-cycling margin can be worse than a fast-cycling thinner one" observation an actual number. Treat it as a comparative ranking aid, not a literal forecast of daily return.
+- **M/1M/day**: `(profit_per_unit / unit_price) × trades_per_day` — "M ISK of profit per day, per 1M ISK committed"; 8.2 means 8.2M ISK/day of profit-earning potential per 1M tied up.
+  - Same unit base on both sides on purpose: "820%/day" reads like literal compounding and invites the wrong conclusion that the position doubles twice a day.
+  - A velocity-adjusted capital-efficiency score, scale-independent (the same value however many units are sized), so it ranks *opportunities* rather than restating the sized position.
+  - **Not** plain profit ÷ capital — that is margin % in disguise. M/1M/day gives Workflow 5's "a slow-cycling margin can be worse than a fast-cycling thinner one" an actual number.
+  - A comparative ranking aid, not a forecast of daily return.
 
 **Rank by M/1M/day, descending — not by margin %, and not by total profit.** This is the user's ranking key. Margin tells you whether a position clears its entry/hold floor; it is not a ranking key. Total profit is a displayed column and a slot filter (below), not the rank key. `scripts/size_positions.py` re-sorts by M/1M/day automatically — don't pre-sort and expect the order to hold; the printed table's row order is the actual priority, and the buffer walk fills in that order. (`rank_by="profit"` exists for the rare case where the user asks for a profit ranking.)
 
@@ -102,7 +117,8 @@ A margin verified live can still be wrecked within hours by a single large order
 
 - Verified margin is a snapshot, not a guarantee. Say so plainly when presenting candidates, especially ones with thinner books (under ~25 buy+sell orders combined) where a single order can move the market a lot.
 - If the user reports a margin looks wrong after having already acted on a recommendation, re-verify live immediately rather than defending the earlier snapshot — the earlier number was correct *at the time*, but markets move.
-- **Before the order is placed**, hold it to the *entry* floor for its tier ([margin-verification.md](reference/margin-verification.md) — "Margin thresholds"); if re-verification shows it's dropped below that, the recommendation is stale — don't place it as sized. **Once the order is actually open**, it's a held position and the flat 10% hold floor applies going forward, not the (possibly higher) entry floor it was opened under — a freshly-opened T2 or T3 position that dips just under its entry bar but still clears 10% is a Hold, not an automatic Kill. Only Kill an open position when it drops below the flat 10% floor.
+- **Before the order is placed**, hold it to the *entry* floor for its tier ([margin-verification.md](reference/margin-verification.md), "Margin thresholds"); if re-verification shows it has dropped below, the recommendation is stale — don't place it as sized.
+- **Once the order is open**, it's a held position and the flat 10% hold floor applies, not the (possibly higher) entry floor it was opened under. A freshly opened T2 or T3 position that dips under its entry bar but clears 10% is a Hold, not an automatic Kill; Kill only below the hold floor.
 
 ## Notes
 
