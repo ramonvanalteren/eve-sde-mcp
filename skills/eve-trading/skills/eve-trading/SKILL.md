@@ -1,6 +1,6 @@
 ---
 name: eve-trading
-description: "Runs hybrid station-trading analysis for EVE Online — buy orders at a low-fee Perimeter structure (range 1) feeding Jita 4-4, sell orders at Jita 4-4. Covers new-position selection from three saved A4E tier URLs, buy and sell portfolio review (kill / increase / hold), inventory risk, pipeline performance, capital allocation, kill-and-redeploy plans, tier-mix reporting, and the daily close and strategy scorecard against the eve-sde-mcp ledger. Use when the user asks for a portfolio review, new candidates or A4E picks, a kill list, to redeploy or put cash to work, to refresh a plan, a day close or P&L for a period, the tier distribution, or whether the strategy is working. Verifies every margin by combining a buy-station call and a Jita 4-4 sell call, since a single-location margin field is not valid for buy-side items. Not for repricing or undercut checks, which are handled live in the client."
+description: "Runs hybrid station-trading analysis for EVE Online — buy orders at a low-fee Perimeter structure (range 1) feeding Jita 4-4, sell orders at Jita 4-4. Covers new-position selection from three saved A4E tier URLs, buy and sell portfolio review (kill / increase / hold), inventory risk, pipeline performance, capital allocation, kill-and-redeploy plans, tier-mix reporting, and the daily close and strategy scorecard against the eve-sde-mcp ledger. Use when the user asks for a portfolio review, new candidates or A4E picks, a kill list, to redeploy or put cash to work, to refresh a plan, a day close or P&L for a period, the tier distribution, or whether the strategy is working. Verifies every margin by combining a buy-station call and a Jita 4-4 sell call, since a single-location margin field is not valid for buy-side items. Not for repricing, outbid or undercut checks: only the in-game client can answer those, so decline instead of inferring from fill rates or running a margin review."
 ---
 
 # EVE Trading Skill — Hybrid Station Trading (Perimeter Buy / Jita 4-4 Sell)
@@ -35,7 +35,7 @@ The book is run as **larger positions on items that actually cycle, sized to the
 - the order count is reported but not capped, and the T1/T2/T3 mix of buy escrow is reported every time;
 - the strategy is judged on realized P&L over at least a week, not on net worth.
 
-The parameter values — the single source of truth, read by `scripts/size_positions.py` — their provenance and the evidence behind them are in [reference/strategy.md](reference/strategy.md); **read it before proposing positions or judging the shape of the book.** Rules here refer to parameters by name (the sizing band, the profit-per-slot floor, the comfortable order range) and never repeat the values.
+The parameter values — the single source of truth, read by `scripts/size_positions.py` — and their provenance are in [reference/strategy.md](reference/strategy.md); **read it before proposing positions or judging the shape of the book.** Dated evidence and baselines live separately in [reference/strategy-evidence.md](reference/strategy-evidence.md) — snapshots, never the current state, read only for the scorecard or a tier-performance question. Rules here refer to parameters by name (the sizing band, the profit-per-slot floor, the comfortable order range) and never repeat the values.
 
 ## Dispatch map — which reference files to read
 
@@ -47,7 +47,7 @@ The parameter values — the single source of truth, read by `scripts/size_posit
 | "Daily close" / "P&L for [period]" | [reference/workflow-daily-close.md](reference/workflow-daily-close.md) |
 | Capital allocation after candidates + review / "invest it all" / "don't let it sit dormant" | [reference/capital-allocation.md](reference/capital-allocation.md) + [reference/strategy.md](reference/strategy.md) |
 | "Kill list and redeploy" / "refresh this plan" / "put all the cash to work" | [reference/capital-allocation.md](reference/capital-allocation.md) (kill-and-redeploy mode: plan skeleton and checklist) + [workflow-portfolio-review.md](reference/workflow-portfolio-review.md) + [workflow-new-candidates.md](reference/workflow-new-candidates.md) + margin-verification + [strategy.md](reference/strategy.md) |
-| "Is the strategy working?" / tier distribution / how the book is shaped | [reference/strategy.md](reference/strategy.md) + the scorecard in [workflow-daily-close.md](reference/workflow-daily-close.md) |
+| "Is the strategy working?" / tier distribution / how the book is shaped | [reference/strategy.md](reference/strategy.md) + [reference/strategy-evidence.md](reference/strategy-evidence.md) (dated baseline) + the scorecard in [workflow-daily-close.md](reference/workflow-daily-close.md) |
 | Why a rule exists / a rule is disputed / a past mistake is referenced | [reference/failure-cases.md](reference/failure-cases.md) |
 
 References are one level deep: read exactly what the table says for the current request — a portfolio review does not need the A4E URLs, and a daily close does not need the margin procedure.

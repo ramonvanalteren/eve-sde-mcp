@@ -20,8 +20,8 @@ sys.path.insert(0, str(SKILL / "scripts"))
 import size_positions as sp  # noqa: E402
 
 DOCS = [SKILL / "SKILL.md", *sorted((SKILL / "reference").glob("*.md"))]
-# strategy.md owns the values; failure-cases.md is history and may quote what happened.
-VALUE_OWNERS = {"strategy.md", "failure-cases.md"}
+# strategy.md owns the values; strategy-evidence.md and failure-cases.md are history and may quote what happened.
+VALUE_OWNERS = {"strategy.md", "strategy-evidence.md", "failure-cases.md"}
 
 # Phrases that state a parameter value. Each must appear only in the owner files.
 REPEATED_VALUE_PATTERNS = {
@@ -136,6 +136,18 @@ class SkillStructure(unittest.TestCase):
                 if target in anchors and m.group(2) not in anchors[target]:
                     broken.append(f"{doc.name} -> {m.group(1) or ''}#{m.group(2)}")
         self.assertEqual(broken, [])
+
+    def test_files_read_on_every_review_hold_no_dated_book_snapshots(self):
+        # A dated snapshot of the book in a rule file gets treated as the current state
+        # (an eval run opened a review with "this doesn't match the baseline we recorded").
+        # Dated evidence belongs in strategy-evidence.md, which is read only for the scorecard.
+        offenders = []
+        for name in ("strategy.md", "workflow-portfolio-review.md", "capital-allocation.md", "margin-verification.md"):
+            text = (SKILL / "reference" / name).read_text(encoding="utf-8")
+            for pattern in (r"\b\d{1,2}:\d{2}\s*UTC\b", r"\bwallet\s+\d[\d.,]*\s*[MB]\b", r"\bbuy escrow\s+\d[\d.,]*\s*[MB]\b"):
+                for m in re.finditer(pattern, text, re.I):
+                    offenders.append(f"{name}: {m.group(0)!r}")
+        self.assertEqual(offenders, [], "dated book state in a rule file: " + ", ".join(offenders))
 
     def test_report_templates_and_checklists_are_present(self):
         review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
