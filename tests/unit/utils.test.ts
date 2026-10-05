@@ -1,5 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { escapeLike, likeContains, escapeHtml } from "../../src/utils.js";
+import { escapeLike, likeContains, escapeHtml, jsonResult } from "../../src/utils.js";
+
+describe("jsonResult", () => {
+  const sample = { a: 1, nested: { b: [1, 2, { c: null }] }, list: [{ id: 1 }, { id: 2 }] };
+
+  it("returns a single text content block", () => {
+    const result = jsonResult(sample);
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("text");
+  });
+
+  it("is compact: no newlines or indentation", () => {
+    const text = jsonResult(sample).content[0].text;
+    expect(text).not.toMatch(/\n/);
+    expect(text).toBe(JSON.stringify(sample));
+  });
+
+  it("round-trips the data exactly, nulls included", () => {
+    const text = jsonResult(sample).content[0].text;
+    expect(JSON.parse(text)).toEqual(sample);
+  });
+
+  it("is meaningfully smaller than the old indented form on a list of records", () => {
+    const records = Array.from({ length: 50 }, (_, i) => ({ orderId: i, price: 1000 + i, state: "open", note: null }));
+    const compact = jsonResult({ orders: records }).content[0].text.length;
+    const indented = JSON.stringify({ orders: records }, null, 2).length;
+    expect(compact).toBeLessThan(indented * 0.8);
+  });
+});
 
 describe("escapeLike", () => {
   it("escapes % wildcard", () => {

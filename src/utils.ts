@@ -25,9 +25,14 @@ export function enrichSystemName(db: Database.Database, systemId: number): strin
   return row?.solarSystemName ?? `Unknown(${systemId})`;
 }
 
+/**
+ * Tool results are read by a model and re-read on every later turn, so they are
+ * sent as compact JSON: indentation alone added about 28% to a list of 292
+ * orders.
+ */
 export function jsonResult(data: unknown) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(data) }],
   };
 }
 

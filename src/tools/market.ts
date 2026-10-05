@@ -4,6 +4,7 @@ import { getDatabase } from "../database.js";
 import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/esi-client.js";
 import { parseEftFormat } from "../fitting/eft.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
+import { computeMarginRow, compactMarginRow, type MarginRow } from "../margins.js";
 
 export interface EsiOrder {
   order_id: number;
@@ -443,36 +444,14 @@ export function registerMarketTools(server: McpServer): void {
           const url = `/markets/${region_id}/orders/?type_id=${type_id}&order_type=all`;
           try {
             const allOrders = await esiGetAll<EsiOrder>(url, { public: true, cacheTtlMs: ESI_CACHE_TTL });
-            const orders = allOrders.filter((o) => o.location_id === location_id);
-
-            const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
-            const sellOrders = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
-
-            const bestBuy = buyOrders[0]?.price ?? null;
-            const bestSell = sellOrders[0]?.price ?? null;
-
-            let margin = null;
-            let profitPerUnit = null;
-            if (bestBuy !== null && bestSell !== null) {
-              const buyTotal = bestBuy * (1 + broker_fee_pct / 100);
-              const sellNet = bestSell * (1 - sales_tax_pct / 100 - broker_fee_pct / 100);
-              profitPerUnit = sellNet - buyTotal;
-              margin = ((profitPerUnit / buyTotal) * 100);
-            }
-
-            return {
-              typeId: type_id,
-              typeName: enrichTypeName(db, type_id),
-              bestBuy,
-              bestSell,
-              spread: bestBuy && bestSell
-                ? ((bestSell - bestBuy) / bestSell * 100)
-                : null,
-              margin,
-              profitPerUnit,
-              buyOrderCount: buyOrders.length,
-              sellOrderCount: sellOrders.length,
-            };
+            return computeMarginRow(
+              type_id,
+              enrichTypeName(db, type_id),
+              allOrders,
+              location_id,
+              sales_tax_pct,
+              broker_fee_pct
+            );
           } catch (err) {
             return {
               typeId: type_id,
@@ -483,8 +462,11 @@ export function registerMarketTools(server: McpServer): void {
         }
       );
 
-      const successful = results.filter((r) => !("error" in r));
-      const sorted = successful.sort((a, b) => (b.margin ?? -Infinity) - (a.margin ?? -Infinity));
+      const isRow = (r: (typeof results)[number]): r is MarginRow => !("error" in r);
+      const sorted = results
+        .filter(isRow)
+        .sort((a, b) => (b.margin ?? -Infinity) - (a.margin ?? -Infinity))
+        .map(compactMarginRow);
 
       return jsonResult({
         locationId: location_id,
@@ -493,7 +475,7 @@ export function registerMarketTools(server: McpServer): void {
         brokerFeePct: broker_fee_pct,
         itemCount: results.length,
         items: sorted,
-        errors: results.filter((r) => "error" in r),
+        errors: results.filter((r) => !isRow(r)),
       });
     }
   );
