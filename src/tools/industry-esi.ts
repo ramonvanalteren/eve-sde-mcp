@@ -5,6 +5,7 @@ import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/es
 import { enrichTypeName, likeContains, jsonResult } from "../utils.js";
 import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./market.js";
 import { resolveLocations, type ResolvedLocation } from "./structures.js";
+import { buildAssetRows } from "../asset-rows.js";
 import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
 import { computeBpoPayback, type BpoPaybackReport } from "../industry/bpo-payback.js";
@@ -659,7 +660,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
   server.tool(
     "get_character_assets",
-    "Get assets (items in hangars/containers) for the authenticated character, enriched with item names.",
+    "Get assets (items in hangars/containers) for the authenticated character, enriched with item names. Each asset row carries a locationId; resolve names through the `locations` list in the result.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       type_name: z.string().optional().describe("Filter assets by item name"),
@@ -678,36 +679,14 @@ export function registerIndustryEsiTools(server: McpServer): void {
       }>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL });
 
       const db = getDatabase();
-      let enriched = assets.map((a) => ({
-        itemId: a.item_id,
-        typeName: enrichTypeName(db, a.type_id),
-        typeId: a.type_id,
-        quantity: a.quantity,
-        locationId: a.location_id,
-        locationType: a.location_type,
-        locationFlag: a.location_flag,
-        isSingleton: a.is_singleton,
-      }));
-
-      if (type_name) {
-        enriched = enriched.filter((a) =>
-          a.typeName.toLowerCase().includes(type_name.toLowerCase())
-        );
-      }
-      if (location_id) {
-        enriched = enriched.filter((a) => a.locationId === location_id);
-      }
+      const enriched = buildAssetRows(assets, (id) => enrichTypeName(db, id), { type_name, location_id });
 
       // Resolve location ids to names/systems (SDE stations + ESI structures)
-      // and report the unique set alongside the items
+      // and report the unique set once, alongside the items (rows carry only locationId)
       const uniqueLocationIds = [...new Set(assets.map((a) => a.location_id))];
       const locations = await resolveLocations(char.characterId, uniqueLocationIds);
       const locationMap: Record<string, ResolvedLocation> = {};
       for (const [id, info] of locations) locationMap[id] = info;
-      enriched = enriched.map((a) => ({
-        ...a,
-        locationName: locationMap[String(a.locationId)]?.name ?? null,
-      }));
 
       return jsonResult({
         characterName: char.characterName,
