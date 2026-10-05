@@ -5,7 +5,7 @@ import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/es
 import { enrichTypeName, likeContains, jsonResult } from "../utils.js";
 import { mapConcurrent, EsiOrder, JITA_TRADE_HUB, MAX_CONCURRENT_ESI } from "./market.js";
 import { resolveLocations, type ResolvedLocation } from "./structures.js";
-import { buildAssetRows } from "../asset-rows.js";
+import { buildAssetRows, groupAssetsByType } from "../asset-rows.js";
 import { computeBuildMargin, type BuildMarginInput, type PriceQuote } from "../industry/build-margin.js";
 import { screenBuilds, averageDailyVolume, type ScanBlueprint } from "../industry/build-scan.js";
 import { computeBpoPayback, type BpoPaybackReport } from "../industry/bpo-payback.js";
@@ -660,13 +660,22 @@ export function registerIndustryEsiTools(server: McpServer): void {
 
   server.tool(
     "get_character_assets",
-    "Get assets (items in hangars/containers) for the authenticated character, enriched with item names. Each asset row carries a locationId; resolve names through the `locations` list in the result.",
+    "Get assets (items in hangars/containers) for the authenticated character, enriched with item names. Each asset row carries a locationId; resolve names through the `locations` list in the result. A full listing is large: narrow it with type_ids, location_id, skip_singletons (drops assembled ships, containers, fitted modules and blueprints), or set group_by_type for one row per item type with total quantity and where it is.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       type_name: z.string().optional().describe("Filter assets by item name"),
+      type_ids: z.array(z.number()).optional().describe("Only these item type IDs"),
       location_id: z.number().optional().describe("Filter by location ID"),
+      skip_singletons: z
+        .boolean()
+        .default(false)
+        .describe("Skip singleton items: assembled ships, containers, fitted modules, blueprints"),
+      group_by_type: z
+        .boolean()
+        .default(false)
+        .describe("One row per item type: total quantity and a per-location breakdown (assetCount stays the number of underlying rows)"),
     },
-    async ({ character_id, type_name, location_id }) => {
+    async ({ character_id, type_name, type_ids, location_id, skip_singletons, group_by_type }) => {
       const char = await getActiveCharacter(character_id);
       const assets = await esiGetAll<{
         item_id: number;
@@ -679,7 +688,12 @@ export function registerIndustryEsiTools(server: McpServer): void {
       }>(`/characters/${char.characterId}/assets/`, { characterId: char.characterId, cacheTtlMs: ESI_CACHE_TTL });
 
       const db = getDatabase();
-      const enriched = buildAssetRows(assets, (id) => enrichTypeName(db, id), { type_name, location_id });
+      const enriched = buildAssetRows(assets, (id) => enrichTypeName(db, id), {
+        type_name,
+        type_ids,
+        location_id,
+        skip_singletons,
+      });
 
       // Resolve location ids to names/systems (SDE stations + ESI structures)
       // and report the unique set once, alongside the items (rows carry only locationId)
@@ -692,7 +706,7 @@ export function registerIndustryEsiTools(server: McpServer): void {
         characterName: char.characterName,
         assetCount: enriched.length,
         locations: Object.values(locationMap),
-        assets: enriched,
+        assets: group_by_type ? groupAssetsByType(enriched) : enriched,
       });
     }
   );
