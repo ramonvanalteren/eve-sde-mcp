@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getDatabase } from "../database.js";
 import { likeContains, jsonResult } from "../utils.js";
+import { resolveTypeNames } from "../type-resolve.js";
 
 export function registerTypeTools(server: McpServer): void {
   server.tool(
@@ -51,6 +52,21 @@ export function registerTypeTools(server: McpServer): void {
 
       const rows = db.prepare(sql).all(...params);
       return jsonResult(rows);
+    }
+  );
+
+  server.tool(
+    "resolve_types",
+    "Resolve many item names to type IDs in one call. Exact, case-insensitive name match only (a partial name resolves to nothing rather than to a guess). Returns `resolved` (name, typeId, typeName), `ambiguous` (names with more than one match) and `missing`. Use after a market scan yields names, instead of one search_types call per item.",
+    {
+      names: z.array(z.string()).min(1).max(300).describe("Item names to resolve"),
+      published_only: z
+        .boolean()
+        .default(true)
+        .describe("Only match published (available in-game) types"),
+    },
+    async ({ names, published_only }) => {
+      return jsonResult(resolveTypeNames(getDatabase(), names, { publishedOnly: published_only }));
     }
   );
 

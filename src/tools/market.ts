@@ -5,6 +5,8 @@ import { esiGet, esiGetAll, getActiveCharacter, ESI_CACHE_TTL } from "../auth/es
 import { parseEftFormat } from "../fitting/eft.js";
 import { enrichTypeName, jsonResult } from "../utils.js";
 import { computeMarginRow, compactMarginRow, type MarginRow } from "../margins.js";
+import { limitRecent, summarizeOrderHistory } from "../order-history.js";
+import { compactHistory, compactOrder, depthWithin } from "../book-view.js";
 
 export interface EsiOrder {
   order_id: number;
@@ -148,7 +150,7 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_order_history",
-    "Get historical (completed/cancelled/expired) market orders for the authenticated character. Supports filtering by item, state, side, location, and date to avoid returning the full 90-day history.",
+    "Get historical (completed/cancelled/expired) market orders for the authenticated character. Supports filtering by item, state, side, location, and date to avoid returning the full 90-day history. An unfiltered call can return hundreds of orders: set `limit` to cap a list at the most recent N orders, or `summary` for one row per item type (order counts by state, cancels under half filled, units ordered/filled, last cancel) — the quick way to check an item's cancellation history.",
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       type_id: z.number().optional().describe("Filter to a specific item type ID"),
@@ -156,8 +158,18 @@ export function registerMarketTools(server: McpServer): void {
       side: z.enum(["buy", "sell"]).optional().describe("Filter to buy or sell orders only"),
       location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4)"),
       issued_after: z.string().optional().describe("Only return orders issued after this ISO date (e.g. '2026-07-01')"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Cap the result: the most recent N orders (list mode) or the N most recently active item types (summary mode)"),
+      summary: z
+        .boolean()
+        .default(false)
+        .describe("Return one summary row per item type instead of individual orders"),
     },
-    async ({ character_id, type_id, state, side, location_id, issued_after }) => {
+    async ({ character_id, type_id, state, side, location_id, issued_after, limit, summary }) => {
       const char = await getActiveCharacter(character_id);
       let orders = await esiGetAll<EsiOrder & { state: string }>(
         `/characters/${char.characterId}/orders/history/`,
@@ -174,7 +186,18 @@ export function registerMarketTools(server: McpServer): void {
       }
 
       const db = getDatabase();
-      const enriched = orders.map((o) => ({
+
+      if (summary) {
+        const types = summarizeOrderHistory(orders, (id) => enrichTypeName(db, id));
+        return jsonResult({
+          characterName: char.characterName,
+          count: orders.length,
+          typeCount: types.length,
+          summary: limit ? types.slice(0, limit) : types,
+        });
+      }
+
+      const enriched = limitRecent(orders, limit).map((o) => ({
         orderId: o.order_id,
         typeName: enrichTypeName(db, o.type_id),
         typeId: o.type_id,
@@ -288,14 +311,19 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_region_orders",
-    "Get market orders for a specific item in a region (public, no auth needed). Use for price checking. Set location_id to filter to a specific station (e.g. 60003760 for Jita 4-4 CNAP).",
+    "Get market orders for a specific item in a region (public, no auth needed). Use for price checking. Set location_id to filter to a specific station (e.g. 60003760 for Jita 4-4 CNAP). top_n sets how many orders per side are returned (default 5). format=\"compact\" returns short rows (price, remain, total, loc, range, ageH) plus `depth`: units within 1%, 3% and 5% of the best price on each side — enough for a depth check in one small call.",
     {
       region_id: z.number().describe("Region ID (10000002 = The Forge/Jita, 10000043 = Domain/Amarr)"),
       type_id: z.number().describe("Type ID of the item"),
       order_type: z.enum(["buy", "sell", "all"]).default("all").describe("Filter by order type"),
       location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4 CNAP)"),
+      top_n: z.number().int().min(1).max(50).default(5).describe("Orders returned per side"),
+      format: z
+        .enum(["full", "compact"])
+        .default("full")
+        .describe("full: complete ESI order objects (default). compact: short rows plus depth sums"),
     },
-    async ({ region_id, type_id, order_type, location_id }) => {
+    async ({ region_id, type_id, order_type, location_id, top_n, format }) => {
       let url = `/markets/${region_id}/orders/?type_id=${type_id}`;
       if (order_type === "buy") url += "&order_type=buy";
       else if (order_type === "sell") url += "&order_type=sell";
@@ -313,7 +341,7 @@ export function registerMarketTools(server: McpServer): void {
       const buyOrders = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
       const sellOrders = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
 
-      return jsonResult({
+      const header = {
         typeName,
         typeId: type_id,
         regionId: region_id,
@@ -325,21 +353,39 @@ export function registerMarketTools(server: McpServer): void {
           : null,
         buyOrderCount: buyOrders.length,
         sellOrderCount: sellOrders.length,
-        topBuyOrders: buyOrders.slice(0, 5),
-        topSellOrders: sellOrders.slice(0, 5),
+      };
+
+      if (format === "compact") {
+        const nowMs = Date.now();
+        return jsonResult({
+          ...header,
+          depth: { buy: depthWithin(buyOrders, "buy"), sell: depthWithin(sellOrders, "sell") },
+          buys: buyOrders.slice(0, top_n).map((o) => compactOrder(o, nowMs)),
+          sells: sellOrders.slice(0, top_n).map((o) => compactOrder(o, nowMs)),
+        });
+      }
+
+      return jsonResult({
+        ...header,
+        topBuyOrders: buyOrders.slice(0, top_n),
+        topSellOrders: sellOrders.slice(0, top_n),
       });
     }
   );
 
   server.tool(
     "get_market_history",
-    "Get daily price/volume history for an item in a region (public, no auth needed).",
+    "Get daily price/volume history for an item in a region (public, no auth needed). The newest row is the last completed day: today's trades are not included. format=\"compact\" returns columns (date, avg, low, high, volume, orders) and one row per day instead of one object per day.",
     {
       region_id: z.number().describe("Region ID (10000002 = The Forge/Jita)"),
       type_id: z.number().describe("Type ID of the item"),
       days: z.number().default(30).describe("Number of recent days to return"),
+      format: z
+        .enum(["full", "compact"])
+        .default("full")
+        .describe("full: one object per day (default). compact: columns plus one array per day"),
     },
-    async ({ region_id, type_id, days }) => {
+    async ({ region_id, type_id, days, format }) => {
       const history = await esiGet<Array<{
         date: string;
         average: number;
@@ -353,7 +399,13 @@ export function registerMarketTools(server: McpServer): void {
       const typeName = enrichTypeName(db, type_id);
       const recent = history.slice(-days);
 
-      return jsonResult({ typeName, typeId: type_id, regionId: region_id, days: recent.length, history: recent });
+      return jsonResult({
+        typeName,
+        typeId: type_id,
+        regionId: region_id,
+        days: recent.length,
+        history: format === "compact" ? compactHistory(recent) : recent,
+      });
     }
   );
 

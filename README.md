@@ -15,6 +15,7 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 | Tool | Description |
 |------|-------------|
 | `search_types` | Search items by name with category/group filters |
+| `resolve_types` | Resolve many exact item names to type IDs in one call (reports missing and ambiguous names) |
 | `get_type` | Full type detail with dogma attributes, effects, and traits |
 | `get_type_attributes` | Dogma attributes (CPU, PG, damage, resists, etc.) |
 | `get_type_effects` | Effects and slot type (hi/med/low/rig) |
@@ -52,12 +53,12 @@ Static data is powered by the [Fuzzwork](https://www.fuzzwork.co.uk/dump/) SQLit
 |------|-------------|
 | `get_wallet_balance` | Character ISK balance |
 | `get_character_orders` | Open market orders with item names |
-| `get_order_history` | Completed/cancelled/expired orders |
+| `get_order_history` | Completed/cancelled/expired orders; `limit` caps a list at the most recent N, `summary` returns one row per item type (order counts by state, cancels under half filled, last cancel) |
 | `get_wallet_journal` | ISK income/expense log |
 | `get_wallet_transactions` | Recent market buys/sells with item names |
 | `get_market_prices` | Global average/adjusted prices (public) |
-| `get_region_orders` | Market orders for an item in a region (public) |
-| `get_market_history` | Daily price/volume history for an item (public) |
+| `get_region_orders` | Market orders for an item in a region (public); `top_n` sets orders per side, `format=compact` returns short rows plus units within 1/3/5% of the best price |
+| `get_market_history` | Daily price/volume history for an item (public); `format=compact` returns columns instead of one object per day |
 | `get_structure_orders` | Orders in a player-owned structure (authenticated) |
 | `get_market_types` | List type IDs with active orders in a region (public) |
 
@@ -142,7 +143,7 @@ ESI's wallet journal/transactions only cover a rolling ~30 days and order histor
 | `price_build` | Price a manufacturing job before committing runs: ME-adjusted blueprint materials at live market prices + installation cost vs the product's net sell — unit build cost and margin on both acquisition bases (materials at sell orders = instant/conservative, at buy orders = patient), book depths, thin-book warnings. Born from a production audit that found a 400-run job committed at +0.9% margin |
 | `get_character_blueprints` | The character's blueprints with ME/TE/runs from ESI — also feeds the BOM pass's exact per-BPO ME resolution |
 | `scan_builds` | Discover industry candidates: screen every market-obtainable T1 manufacturing BPO in a category (or a specific product list — synergy mode) with ESI bulk adjusted prices, then LIVE-verify the top candidates at a station (order-book margins on both bases, 30-day traded volume, book depths, input cost-share). Screen ranks, verification decides — the closed SDE blueprint universe makes industry discovery self-sufficient, no external tier feeds needed |
-| `get_character_assets` | Items in hangars/containers with names |
+| `get_character_assets` | Items in hangars/containers with names; rows carry `locationId` (names are in `locations`); filter with `type_ids`, `location_id`, `skip_singletons`, or `group_by_type` for one row per item type |
 | `get_character_contracts` | Courier, item exchange, auction contracts |
 
 ## Setup
