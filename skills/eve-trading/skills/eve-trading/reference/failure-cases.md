@@ -18,6 +18,9 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [Weekly seasonality not accounted for in fill-velocity reads](#weekly-seasonality-not-accounted-for-in-fill-velocity-reads)
 - [Yield ranking alone favours small slots (2026-10-04)](#yield-ranking-alone-favours-small-slots-2026-10-04)
 - [Judging a strategy change by net worth or by a window that predates it (2026-10-04)](#judging-a-strategy-change-by-net-worth-or-by-a-window-that-predates-it-2026-10-04)
+- [Kill verdicts built on lagging history margins (2026-10-08)](#kill-verdicts-built-on-lagging-history-margins-2026-10-08)
+- [Fills inferred from ESI daily lows instead of A4E Sold2Buy (2026-10-09)](#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09)
+- [Margins measured against a swept bid (2026-10-10)](#margins-measured-against-a-swept-bid-2026-10-10)
 
 ## Sell-only items reported as buy-side verdicts (twice)
 
@@ -74,6 +77,8 @@ The Shadow Serpentis Explosive Armor Hardener experiment took well over a week e
 
 This file has previously reverted to an earlier saved version between sessions (content frozen at initial-creation timestamp despite many later in-session edits), and the `scripts/` subfolder has separately gone missing at least once even when SKILL.md itself was intact. The skill is now version-controlled in the eve-sde-mcp repository — if anything looks truncated or stale, restore from git history rather than silently working from a broken copy.
 
+**Scratch-directory scripts get lost too (2026-10-10).** The live-verification and scan scripts that sessions had been writing into a scratch folder (book fetcher, A4E parser, review and scan scripts) were gone when a later session needed them and had to be rebuilt from the conversation transcript. They now live in `scripts/` (`market.py`, `a4e.py`, `portfolio.py`, `scan_candidates.py`, `review_portfolio.py`, `depth.py`), take their inputs as saved tool-result files, and have offline tests.
+
 ## Accidental default-price order crashed a margin (75mm Prototype Gauss Gun)
 
 *Rule it motivates: a sudden margin collapse gets the same spot-check as a suspiciously high one (margin-verification.md, "Thin single-unit outliers").*
@@ -111,3 +116,25 @@ By 2 Oct the book held about 40 open buy orders against 15 sells (35 buys and 4.
 *Rule it motivates: the strategy scorecard (workflow-daily-close.md, step 8).*
 
 Asked whether the renewed strategy was paying off, the first instinct was net worth. The closes can't support that: `reconciliation_gap` ran from −5.4B (27 Sep) to +1.3B (1 Oct), `escrow_committed` went negative on 27–28 Sep, and about 440M left the wallet through non-trading journal entries in the week (216M on 30 Sep, 117M on 2 Oct). Realized net P&L showed a +20% week-over-week gain (918M to 1,098M), but the median day was flat (138M vs 140M), the best days were 27 and 29 Sep — before the rule changes — and the like-for-like Thu–Sat comparison after the change was flat (424M vs 426M). A headline gain that predates the change, or rests on a few outlier days, is not evidence for it.
+
+## Kill verdicts built on lagging history margins (2026-10-08)
+
+*Rule it motivates: Workflow 2's Kill step — judge a held position on the live two-call margin and the character's own sells.*
+
+A review recommended Kills on three held positions — Centii A-Type Small Remote Armor Repairer, Unstable Heavy Energy Neutralizer Mutaplasmid and Domination Inertial Stabilizers — from a "traded-level" margin: the median of the last three daily highs in ESI history, a guard meant for screening *new* candidates against phantom asks. ESI history publishes after downtime for the previous day, so at review time it is one to two days stale and understates a rising market. The user's reaction was "These look very strange to me." The live two-call margins were 64%, 19.4% and 9.3%, and the character's own sells matched or beat the live asks (Centii 57.57M, the neutralizer mutaplasmid 32.97M three times, Domination Inertial 46.49M). The Kill list was emptied.
+
+What changed: Kill only on the live margin at the competitive bid, weigh the character's own realized sells above history, and when live and history diverge report the exit-price scenarios and the break-even sell price and call it uncertain rather than Kill. When a breach of 0.5–1 point exists only because the user raised their own bid, offer the reprice that restores the floor instead of a Kill.
+
+## Fills inferred from ESI daily lows instead of A4E Sold2Buy (2026-10-09)
+
+*Rule it motivates: [Fill evidence](margin-verification.md#fill-evidence) in margin-verification.md.*
+
+Five fast, high-margin items (High-Tech Scanner, Tracking Enhancer II, High-Tech Data Chip, Missile Guidance Computer II, Medium Hyperspatial Velocity Optimizer II) were dropped from a candidate list with the explanation that sellers never trade down to the bid, because the ESI daily low sat far above it — stated as fact. The user called it wrong and pointed at the A4E snapshots. They were right: A4E showed 67–76 trades a day sold into buy orders (577 and 469 units a day for the Scanner and the Data Chip), and two live book snapshots 5.7 minutes apart showed 20 units sold into the Scanner's 550,900 bid and 11 into the Data Chip's 500,100 bid. ESI history is daily and lags; it cannot say whether a bid fills.
+
+What changed: the old "days where the daily low was within 2% of the bid" gate was removed; fills are judged from A4E Sold2Buy volume and trades, young partly-filled bids in the live book, and a two-snapshot diff when in doubt; orders are capped at one day of Sold2Buy volume; and a mechanism that was only inferred is not stated as fact. The same request is where the user allowed a 7.5% entry floor for sufficiently high-velocity items (the high-velocity relaxation in margin-verification.md).
+
+## Margins measured against a swept bid (2026-10-10)
+
+*Rule it motivates: the swept-bid and price-spike gates in workflow-new-candidates.md, step 3.*
+
+A fresh A4E pull listed Republic Fleet Small Cap Battery at 52% (bid 9.1M against an ask of 14.6M), Salvager II at 57% and Medium Cargohold Optimization II at 23%. Each bid was 46%, 58% and 26% below its own 7-day average: the real bids had just been swept, and the displayed margin was measured against what remained. Daily history put that item's trades between 13.8M and 15.3M over the week before, so a bid near that level would have left almost no margin. A4E's 7dBuy column shows this at a glance, so rows with 7dBuy under −5% are now rejected. In the same pull, Heron (average price up 95% in eight days), Kestrel, Expanded Probe Launcher II and Scan Rangefinding Array II had asks that had stepped 15% to over 60% within two days; those are now rejected as unproven price levels (an ask above +25% of its 7-day level, or an average price that jumped 15%+ in a day or two).

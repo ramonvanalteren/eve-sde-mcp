@@ -2,6 +2,8 @@
 
 A plain "portfolio review" request runs Workflows 2–5 together in this order by default. Equal rigor throughout — Workflow 3 in particular has been a repeated source of real errors when treated as an afterthought. Verify every margin figure with the [two-call procedure in margin-verification.md](margin-verification.md).
 
+The live-margin tables are scripted — `scripts/review_portfolio.py buys|sells|extend` (inputs: the saved `get_character_orders`, `get_wallet_transactions` and `get_character_assets` results; formats in `scripts/portfolio.py`). Its `hint` column (KILL? / EDGE / ok) is a prompt for the spot-checks below, never the verdict.
+
 ## Contents
 - [Report skeleton and pre-send checklist](#report-skeleton-and-pre-send-checklist)
 - [Workflow 2 — Buy portfolio review (kill / increase / hold)](#workflow-2--buy-portfolio-review-kill--increase--hold)
@@ -36,6 +38,7 @@ Workflow 5 — Pipeline            the 2-3 clearest outliers with the capital-ef
 ```
 Pre-send checklist:
 - [ ] Every margin is the two-call figure at the competitive bid — never the tool's own `margin` field
+- [ ] Every Kill rests on the live margin at the competitive bid and the character's own recent sells — never on a margin rebuilt from ESI history
 - [ ] `isBuyOrder` and `escrow` confirmed before any buy-side verdict; sell-only items went to Workflow 3
 - [ ] Buy orders grouped by their own `locationId`
 - [ ] Every zero-fill Kill checked for order age against fill history (not `issued`) and for jump-range competition
@@ -63,6 +66,10 @@ Pre-send checklist:
      - daily trade volume has dried up;
      - the sell side has moved sharply against the position (e.g. a >15-20% drop in achievable margin since it was opened);
      - zero fills over the lookback window, regardless of margin. A common cause is a bid far below the ask, so sellers never reach it — name that cause in the "why" instead of calling it "no demand".
+   - **Kill on live evidence, not on history.** The figure is the live two-call margin at the competitive bid, set beside the character's own sells of that item over the last few days (realized price, `get_wallet_transactions`). Do not Kill on a margin rebuilt from ESI market history (a "traded-level" median of recent daily highs): it lags one to two days and understates a rising market, and that is how a review once called three healthy positions Kills ([failure-cases.md](failure-cases.md#kill-verdicts-built-on-lagging-history-margins-2026-10-08)). That guard belongs to Workflow 1.
+     - If live and history disagree, report the exit-price scenarios and the break-even sell price for the hold floor, and call it uncertain — not a Kill.
+     - If the live ask that causes the breach is a few units at the top of a thicker ladder, run the stray-order spot check ([margin-verification.md](margin-verification.md), "Thin single-unit outliers") and show the margin at the next durable tier as well.
+     - If the position sits just under the floor (within about a point) only because the user raised their own bid, offer the reprice that restores the floor instead of a Kill. When the margin at the order's own price and at the competitive bid straddle the floor, it is a Hold with both figures shown.
    - **Before finalizing a zero-fill Kill, check order age and diagnose the cause:**
      - A brand-new order (minutes to a couple of hours old) shows zero fills whatever its margin — that is "too early to judge", not stalled.
      - For orders old enough that zero fills is a real signal, run the jump-range check ([margin-verification.md](margin-verification.md)) before concluding "no demand": a Jita 4-4 station-range order or a nearby structure may be outbidding it. If so, say so — it is still a Kill (only these two locations are traded), but "outcompeted" is the more useful reason. The same check runs proactively in Workflow 1; this is its reactive counterpart for positions that went quiet.
@@ -77,6 +84,7 @@ Pre-send checklist:
      - **Runway check — a proven converter is not automatically an Increase.** A strong historical fill rate says the item is worth holding, not that *this order* needs more capital.
        - Runway = current `volumeRemain` ÷ recent fill velocity (units/day from `get_wallet_transactions`, last 3-7 days). If runway is already more than a few days, a second order just parks escrow behind capital that hasn't converted.
        - Recommend Increase only when the existing order's remaining volume is thin relative to its pace (likely to run dry and force a relist soon). (Why: [failure-cases.md](failure-cases.md#increase-recommended-without-checking-existing-order-capacity-graviton-physics-mechanical-engineering).)
+     - **Fill evidence applies here too.** `review_portfolio.py extend` ranks held types by days of cover and shows A4E Sold2Buy next to the live margin; an Increase on something whose Sold2Buy is thin is parked escrow ([margin-verification.md](margin-verification.md#fill-evidence)).
      - **Execution:** there is no "add units to an existing order". Either (a) place a second order for just the increment — broker fee only on the new capital — or (b) cancel and reissue larger — fee on the *entire* new value. Default to (a); use (b) only when the existing price is stale and needs correcting anyway. A second order goes to Perimeter HQ (0.5% fee) even if the original still sits at Jita 4-4.
    - **Hold**: no material change, leave as-is.
 5. Do NOT evaluate or report on whether individual orders are currently outbid/at top-of-book — this is about capital allocation and profitability, not queue position. If the user wants queue-position checks, that's a separate live/client-side task outside this skill.
@@ -100,7 +108,7 @@ Pre-send checklist:
 This workflow gets the same rigor as Workflow 2 — treating it as an afterthought has caused repeated real mistakes. Sell orders are unaffected by the Perimeter move (they stay at Jita 4-4, same fees). The buy location only changes the broker fee paid to acquire a lot, and that is a separate wallet-journal entry, not part of the per-unit price `get_wallet_transactions` returns — so the cost-basis method below is unaffected by where a lot was bought.
 
 1. Take the sell-only type_ids identified in Workflow 2, step 2 (no `isBuyOrder`/`escrow` field on any of that item's open orders).
-2. **Determine held units first, from both sources — not just the sell order.** Sum the `volumeRemain` across all open sell orders for the item, *plus* any uncovered units Workflow 4 found sitting in the hangar with no sell order at all. Confirmed failure case: Federation Navy 200mm Steel Plates was reported with held=1 (the sell order only) when Workflow 4 had already found 2 more unlisted units — the per-unit margin was still right, but the total exposure/profit figure was understated by 3x. See [failure-cases.md](failure-cases.md).
+2. **Determine held units first, from both sources — not just the sell order.** (`review_portfolio.py sells --assets …` does this and separates stock at Jita 4-4 from stock elsewhere; stock sitting at another station or in a container cannot be listed at Jita 4-4 until it is moved — name where it is.) Sum the `volumeRemain` across all open sell orders for the item, *plus* any uncovered units Workflow 4 found sitting in the hangar with no sell order at all. Confirmed failure case: Federation Navy 200mm Steel Plates was reported with held=1 (the sell order only) when Workflow 4 had already found 2 more unlisted units — the per-unit margin was still right, but the total exposure/profit figure was understated by 3x. See [failure-cases.md](failure-cases.md).
 3. **Do not use `get_portfolio_margins` as the verdict for these.** Pull `get_wallet_transactions(side="buy", type_id=X)` and compute cost basis as the **bounded weighted average**, not a full-history blend:
    - sort buy transactions newest-first and sum quantities from the top until they cover the held-units figure from step 2; use only those lots and discard older ones entirely;
    - this matters whenever held units < total units ever bought — a full-history blend dilutes the average with lots that have very likely already sold, mispricing the result in whichever direction the price trend moved;

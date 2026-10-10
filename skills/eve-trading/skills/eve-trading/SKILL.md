@@ -9,7 +9,7 @@ description: "Runs hybrid station-trading analysis for EVE Online — buy orders
 
 Six numbered workflows plus two capital-allocation modes. A plain "portfolio review" request runs Workflows 2-5 together by default; Workflow 1 runs when new candidates are explicitly requested (it fetches its own A4E data, so it needs no pasted snapshot); Workflow 6 runs only on request.
 
-1. **New position selection** (Workflow 1) — fetch the three saved A4E tier URLs (T1/T2/T3) and scan for items worth opening a new buy slot on, sized for execution at Perimeter HQ.
+1. **New position selection** (Workflow 1) — fetch the three saved A4E tier URLs (T1/T2/T3) and a high-velocity supplement, verify each survivor live, gate it on fill evidence (A4E Sold2Buy and the live book, not price inference), and size it for execution at Perimeter HQ. Scripted: `scripts/a4e.py`, `scripts/scan_candidates.py`.
 2. **Buy portfolio review** (Workflow 2) — review existing open buy orders and decide: kill, increase investment, or leave as-is.
 3. **Sell portfolio review** (Workflow 3) — review sell-only positions (inventory with no open buy order) against real acquisition cost, not generic market margin. Equal rigor to Workflow 2 — this has been a repeated source of errors when treated as an afterthought.
 4. **Inventory risk** (Workflow 4) — hangar stock with no matching sell order at all; mandatory every review.
@@ -48,9 +48,25 @@ The parameter values — the single source of truth, read by `scripts/size_posit
 | Capital allocation after candidates + review / "invest it all" / "don't let it sit dormant" | [reference/capital-allocation.md](reference/capital-allocation.md) + [reference/strategy.md](reference/strategy.md) |
 | "Kill list and redeploy" / "refresh this plan" / "put all the cash to work" | [reference/capital-allocation.md](reference/capital-allocation.md) (kill-and-redeploy mode: plan skeleton and checklist) + [workflow-portfolio-review.md](reference/workflow-portfolio-review.md) + [workflow-new-candidates.md](reference/workflow-new-candidates.md) + margin-verification + [strategy.md](reference/strategy.md) |
 | "Is the strategy working?" / tier distribution / how the book is shaped | [reference/strategy.md](reference/strategy.md) + [reference/strategy-evidence.md](reference/strategy-evidence.md) (dated baseline) + the scorecard in [workflow-daily-close.md](reference/workflow-daily-close.md) |
+| Whether a bid will fill / a fast item looks skipped / the user disputes a fill claim | [reference/margin-verification.md](reference/margin-verification.md) ("Fill evidence") + `scripts/depth.py --diff` |
 | Why a rule exists / a rule is disputed / a past mistake is referenced | [reference/failure-cases.md](reference/failure-cases.md) |
 
 References are one level deep: read exactly what the table says for the current request — a portfolio review does not need the A4E URLs, and a daily close does not need the margin procedure.
+
+## Scripts — run them, don't re-derive them
+
+Stdlib-only Python 3.9+, in this skill's `scripts/` folder; run from that folder. They use public ESI and the A4E site, read the character's data from JSON files the session saves from the eve-sde tool results (formats in `scripts/portfolio.py`), and **place or cancel nothing**. Unit tests (`tests/`) cover the arithmetic, the gates and the A4E parsing; the live behaviour is checked by running them.
+
+| Script | Use it for |
+|---|---|
+| `a4e.py fetch DIR` | Save the raw A4E pages for Workflow 1: three saved tiers plus the high-velocity supplement. Raw, because the fill-evidence gates need columns a summary drops. |
+| `scan_candidates.py` | Workflow 1: live two-call margin on every A4E row, then the fill-evidence, swept-bid, spike and floor gates; prints passes ranked by M/1M/day and every rejection with its reason. |
+| `review_portfolio.py buys` / `sells` / `extend` | Workflow 2 live margins with a KILL? / EDGE / ok hint; Workflow 3 bounded-cost table with unlisted stock; held types ranked by days of cover for Increases. |
+| `depth.py` | The depth checklist for a few items; `--diff SECONDS` for a two-snapshot fill test; `--breakeven TYPE:COST:UNITS` for stock held back from sale. |
+| `size_positions.py` | Sizing, ranking and the buffer walk (below). |
+| `market.py`, `portfolio.py` | Shared helpers: ESI books and history, the margin formula, the competitive bid, the character-file loaders. Not run directly. |
+
+The scripts hold judgement-free mechanics only. Which rows to recommend, the depth read, whether a breach is a Kill, and the unit counts handed to the sizer stay with you.
 
 ## Mandatory sizing rule (applies to Workflows 1, 2, and 3)
 
@@ -63,10 +79,11 @@ Sizing method:
    - Use the top of the band for deep, durable books (100+ trades/day, 20+ orders on both sides) and the bottom for thinner ones; above the ceiling the order parks escrow behind fills that won't come for days.
    - **Thin-item exclusion:** if even the minimum increment would exceed the band ceiling, don't open it — the test that cut the thin T3 items.
    - Don't hoard cash either: if the pool is bigger than the band can absorb, say so and report the leftover as buffer rather than inflating a position past the ceiling.
+   - **Cap a new order at one day of confirmed sellers:** units never exceed the item's A4E Sold2Buy volume per day (margin-verification.md, "Fill evidence"). Beyond that the order sits for days; `scan_candidates.py` applies the cap and marks the row "S2B-capped".
 3. **Size in increments of 5 or 10 units — never an odd one-off count like 3 or 7.** A position small enough to need an awkward unit count usually isn't worth the broker-fee overhead of opening and relisting it. There is generally enough capital available to round up to the next clean increment rather than shrink to fit a budget — prefer rounding up over sizing something oddly. `scripts/size_positions.py` (see step 7) now enforces this automatically by rounding whatever unit count you pass to the nearest multiple of 5, so lean on it rather than hand-picking an exact number.
 4. For **Kill**, state the ISK recovered: unit count × price × (freed escrow), so the user knows exactly what capital comes back.
 5. For **Increase**, suggest an incremental unit count and its ISK cost, sized against both remaining wallet capacity and the sizing band above — don't suggest doubling a position that only trades 12 units/day. New increments go to Perimeter HQ per the Workflow 2 execution note.
-6. For **new candidates**, suggest a starting position size (units + ISK) at Perimeter HQ, scaled down for thinner items and up for deep/liquid ones, and note if slot capacity is a constraint.
+6. For **new candidates**, suggest a starting position size (units + ISK) at Perimeter HQ, scaled down for thinner items and up for deep/liquid ones, and note if slot capacity is a constraint. Rows that clear only through the high-velocity relaxation are labelled as such.
 7. Once you've picked unit counts per candidate (depth and thin-book judgement stay with you, not the script), **run `scripts/size_positions.py` from this skill's folder** — execute it, don't read it. It needs only Python 3.9+, no packages.
 
    ```bash
@@ -126,4 +143,4 @@ A margin verified live can still be wrecked within hours by a single large order
 - Slot count is a real constraint — when recommending new candidates, note how many free trading slots would be needed and flag if the character's skill-based slot cap might be a limiting factor.
 - If a wallet balance change doesn't reconcile against orders and `get_wallet_transactions` (e.g. a drop with no matching buy/escrow change — this has happened before, once turning out to be a corp slush fund transfer), use `get_wallet_journal(since=..., ref_type=...)` to check for non-trading entries before treating it as a mystery. Useful `ref_type` values: `market_transaction`, `brokers_fee`, `transaction_tax`, plus non-trading ones for transfers.
 - **Sizable realized profit ≠ sizable realized cash.** When asked to analyze recent transactions, don't equate gross sell revenue with profit — a big cash inflow from selling out a large position is mostly return of the original cost basis, not margin. Compute per-item real profit (sell revenue net of fees minus real acquisition cost, per the portfolio review's Workflow 3 method) before characterizing a period as more or less profitable than it looks from the wallet delta alone.
-- **Version canary.** This skill is version-controlled in the eve-sde-mcp repository. If a review shows it missing sections referenced above (the dispatch map, the sizing rule, the two-location summary) or `scripts/size_positions.py` is unreachable, say so plainly before proceeding rather than silently working from a stale version — restore from git history.
+- **Version canary.** This skill is version-controlled in the eve-sde-mcp repository. If a review shows it missing sections referenced above (the dispatch map, the sizing rule, the two-location summary) or any file in `scripts/` (the table above) is unreachable, say so plainly before proceeding rather than silently working from a stale version — restore from git history.

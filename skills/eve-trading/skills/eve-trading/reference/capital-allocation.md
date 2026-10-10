@@ -39,7 +39,7 @@ Trigger: "draft a kill list and redeploy all capital", "assume the kills are exe
    - **User-directed consolidation** — above the floor but weak slots: zero or one fill, remaining volume that would take more than about a week at the observed pace, units that are a large multiple of daily trades, or a bid sitting far below the ask so sellers never reach it. Say explicitly these are not floor breaches. Escrow comes back in full; the broker fee already paid is not refunded — state that sunk amount.
    - **Watch list** — positions at or just above the floor that are kept, each with the trigger for cutting it ("cut if under 10%") and the cash cutting would add that the volume caps could not absorb.
 3. **Pool** = fresh wallet + freed escrow. **Buffer** = the user's stated figure.
-4. **Candidates**: Workflow 1 on fresh A4E data for all three tiers, plus existing converters that pass the Workflow 2 runway check for Increase. Verify margins with the two-call procedure, then **depth-check the top rows** with the checklist in workflow-new-candidates.md. List what was excluded after checks, each with its reason.
+4. **Candidates**: Workflow 1 on fresh A4E data for all three tiers and the high-velocity supplement (`scripts/a4e.py`, `scripts/scan_candidates.py`), plus existing converters that pass the Workflow 2 runway check for Increase (`scripts/review_portfolio.py extend` ranks held types by days of cover). Items the user has killed — and, by default, their families — never re-enter the pool (workflow-new-candidates.md, step 2). Verify margins with the two-call procedure, apply the fill-evidence gates, then **depth-check the top rows** with the checklist in workflow-new-candidates.md. List what was excluded after checks, each with its reason.
 5. **Size** per SKILL.md with `scripts/size_positions.py`, passing `freed=`, `buffer_target_isk=`, `current_open_orders=` and `current_tier_escrow=` (the last two after the assumed Kills).
 6. **If the volume caps run out before the pool does**, stop there. The buffer lands above target; report by how much. Don't inflate positions past the band or add weak candidates to use the cash up.
 7. **Present**: the Kill table (Workflow 2 format, with ISK freed), the consolidation and watch lists, the redeploy table (required template, ranked by M/1M/day), the cash math (cash now + freed = pool, deployed, buffer vs target), order count and tier mix before and after, the per-pick cautions, the excluded-after-checks list, and — if asked, or if the order count lands above the comfortable range — the fewer-orders variant. Close with the reminder that margins are point-in-time and the top picks should be re-verified right before placing.
@@ -66,7 +66,8 @@ Pre-send checklist:
 - [ ] Wallet re-pulled just before building the plan
 - [ ] Cut list split into Kills / consolidation / watch list, never merged
 - [ ] Freed escrow counted in the pool; buffer = the figure the user stated
-- [ ] Fresh A4E data for all three tiers; two-call margins on every row; depth checklist on every row recommended
+- [ ] Fresh A4E data for all three tiers and the high-velocity supplement; two-call margins and the fill-evidence gates on every row; depth checklist on every row recommended
+- [ ] Killed items and their families excluded; rows that rely on the high-velocity relaxation labelled
 - [ ] Sizing and ranking done by `scripts/size_positions.py`, not by hand
 - [ ] Leftover cash reported if the volume caps ran out first
 - [ ] Order count and tier mix reported before and after
