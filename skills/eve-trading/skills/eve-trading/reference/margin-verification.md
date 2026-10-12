@@ -8,6 +8,7 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 - [Margin thresholds](#margin-thresholds)
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
 - [The competitive bid](#the-competitive-bid)
+- [Fill evidence](#fill-evidence)
 - [The jump-range competition check](#the-jump-range-competition-check)
 - [Thin single-unit outliers](#thin-single-unit-outliers)
 - [Fee numbers drift — verify via get_station_fees](#fee-numbers-drift--verify-via-get_station_fees)
@@ -42,6 +43,7 @@ As of **2026-09-23**, entry and hold use two different floors — they answer di
 - **T3: ≥13%**, or **≥10% if the candidate clears a liquidity bar**: ≥50 trades/day *and* a combined buy+sell order count that clears the thin-book depth check below (roughly 25+).
   - The carve-out exists so a genuinely liquid T3 item (e.g. a high-volume filament trading 150+/day) isn't held to the full 13% just for its price tier; a thin T3 item still needs 13% however good its headline margin looks.
   - Never grant it on trade count alone — a busy-looking average over a volatile week isn't a durably deep book. Check the actual order counts.
+- **High-velocity relaxation (user-directed, entry only).** The user has said they are willing to drop the entry floor to 7.5% for items with sufficient high velocity. Working definition: A4E average trades of at least 100/day, a 3-day ESI volume of at least 100 units/day, and at least 15 orders on each side of the live book. Rows that clear only through it are labelled "HV floor" in the proposal. It does not change the hold floor below, with one exception made in the review script: a held position that A4E confirms as high-velocity is judged against the same relaxed floor, because the flat hold floor would otherwise Kill positions bought under the user's own allowance. If the user has not allowed it in the current conversation, ask before relying on it (`--no-hv` in the scripts). Where it came from: [failure-cases.md](failure-cases.md#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09).
 
 **Holding an existing position (Workflow 2 Kill/Hold, and the point-in-time re-verification rule in SKILL.md)** — one flat floor regardless of tier: **≥10%**. Once capital is already committed there's no broker-fee cost to simply continuing to hold it, unlike the opportunity cost of choosing to commit fresh capital to one candidate over another — so the bar for staying in is lower than the bar for getting in. A held position at or above 10% clears the Kill/Hold margin check, whatever tier it's in.
 - **This is a floor, not a sufficient Hold signal by itself.** A position sitting above 10% but not actually converting (thin fill velocity, capital parked idle) still gets flagged through Workflow 5's capital-efficiency lens — that check is separate from and additional to this one. Margin says the trade is profitable; it says nothing about whether the capital is well used right now.
@@ -68,6 +70,19 @@ For any margin on an open or proposed buy, "the bid" is the **competitive bid**:
 Sellers at Jita 4-4 take the highest bid they can reach, so a Perimeter order priced below any of these queues behind it. The Perimeter-side batch call only reports (a); get (b) from a Jita-side buy call or `get_region_orders`, and (c) from `get_region_orders` unfiltered by location (the same pull as the jump-range check below).
 
 Quote the **live margin at the competitive bid**, and the margin at the order's own price as well only when the two straddle the 10% floor. Housekeeping: structure 1042508032148 and a few other stations have no entry under `stationFees` in `~/.eve-sde/config.json`, so the daily close prices their broker fees at a generic 1% and flags it every run — pin the real fees with `get_station_fees` when they're known.
+
+## Fill evidence
+
+A margin says a trade is profitable; it says nothing about whether a bid fills. Judge fills from direct evidence of sellers hitting buy orders, in this order:
+1. **A4E Sold2Buy (S2B) columns** — confirmed 7-day average units and trades per day sold *into buy orders* — and **7dBuy / 7dSell**, the current best bid and ask against their own 7-day averages. The scan requires S2B of at least 20 units and 15 trades a day, and never sizes an order above one day of S2B volume.
+2. **Young partly-filled bids near the top of the live book** (`volume_remain < volume_total`, issued under 24h ago, within 2% of the best bid). None means nobody has sold into that price today.
+3. **Two buy-side snapshots a few minutes apart** (`scripts/depth.py --diff`) when the first two disagree or a claim is disputed — it counts the units that left each bid in between.
+
+**Do not infer a fill from the ESI daily low or high.** ESI history is daily and lags one to two days; it is not evidence that a bid will or won't fill. A claim built on it was refuted by the A4E columns and a book diff — see [failure-cases.md](failure-cases.md#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09). History stays useful for trend and ceiling checks (a recent high as the sell reference, a price that just stepped), nothing more.
+
+**Swept bids.** When the best bid is far below its own 7-day average (7dBuy under −5%), the top bids were just eaten and the margin on screen is measured against a bid that will not last: competing buyers return and the working bid sits near the old level. Reject the row, or recompute the margin at the 7-day average bid. The same reading applies to a held position whose margin looks too good.
+
+**Unproven price levels.** An ask more than 25% above its 7-day level, or an average price that stepped 15%+ in a day or two, may revert; so may bids that follow it up. Prefer rows where both sides have held the new level for several days.
 
 ## The jump-range competition check
 
