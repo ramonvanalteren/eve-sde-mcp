@@ -53,6 +53,10 @@ interface EsiTransaction {
 }
 
 const MARKET_PRICE_CACHE_TTL = 10 * 60 * 1000;
+
+// get_wallet_transactions returns ~30 days (thousands of rows, ~0.5 MB) with no
+// filter; default to a short window so routine calls stay small.
+const DEFAULT_TRANSACTION_WINDOW_DAYS = 2;
 export const JITA_TRADE_HUB = 60003760;
 export const MAX_CONCURRENT_ESI = 10;
 
@@ -242,13 +246,13 @@ export function registerMarketTools(server: McpServer): void {
 
   server.tool(
     "get_wallet_transactions",
-    "Get recent wallet transactions (market buys/sells) for the authenticated character, enriched with item names. Supports filtering by item, side, location, and date.",
+    `Get recent wallet transactions (market buys/sells) for the authenticated character, enriched with item names. Supports filtering by item, side, location, and date. Unless 'since' or 'type_id' is given, only the last ${DEFAULT_TRANSACTION_WINDOW_DAYS} days are returned to keep the payload small — pass an earlier 'since' (ESI history reaches back ~30 days) for more.`,
     {
       character_id: z.number().optional().describe("Character ID (uses active character if omitted)"),
       type_id: z.number().optional().describe("Filter to a specific item type ID"),
       side: z.enum(["buy", "sell"]).optional().describe("Filter to buy or sell transactions only"),
       location_id: z.number().optional().describe("Filter to a specific station/structure (e.g. 60003760 = Jita 4-4)"),
-      since: z.string().optional().describe("Only return transactions after this ISO date (e.g. '2026-07-01')"),
+      since: z.string().optional().describe(`Only return transactions after this ISO date (e.g. '2026-07-01'). Defaults to the last ${DEFAULT_TRANSACTION_WINDOW_DAYS} days unless type_id is set.`),
     },
     async ({ character_id, type_id, side, location_id, since }) => {
       const char = await getActiveCharacter(character_id);
@@ -260,8 +264,10 @@ export function registerMarketTools(server: McpServer): void {
       if (type_id) transactions = transactions.filter((t) => t.type_id === type_id);
       if (side) transactions = transactions.filter((t) => side === "buy" ? t.is_buy : !t.is_buy);
       if (location_id) transactions = transactions.filter((t) => t.location_id === location_id);
-      if (since) {
-        const cutoff = new Date(since).getTime();
+      const effectiveSince =
+        since ?? (type_id ? undefined : new Date(Date.now() - DEFAULT_TRANSACTION_WINDOW_DAYS * 86_400_000).toISOString());
+      if (effectiveSince) {
+        const cutoff = new Date(effectiveSince).getTime();
         transactions = transactions.filter((t) => new Date(t.date).getTime() >= cutoff);
       }
 
@@ -279,7 +285,7 @@ export function registerMarketTools(server: McpServer): void {
         clientId: t.client_id,
       }));
 
-      return jsonResult({ characterName: char.characterName, count: enriched.length, transactions: enriched });
+      return jsonResult({ characterName: char.characterName, count: enriched.length, since: effectiveSince ?? null, transactions: enriched });
     }
   );
 
