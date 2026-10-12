@@ -173,6 +173,14 @@ class SkillStructure(unittest.TestCase):
         self.assertIn("keeps its `order_id` and resets `issued`", review)
         self.assertIn("`volumeTotal − volumeRemain`", review)
 
+    def test_item_name_code_span_rule_is_stated_and_checklisted(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Every item name is a code span", skill)
+        self.assertIn("plain ASCII apostrophe", skill)
+        for name in ("workflow-portfolio-review.md", "capital-allocation.md"):
+            text = (SKILL / "reference" / name).read_text(encoding="utf-8")
+            self.assertIn("Every item name is in a code span", text, f"{name} checklist lacks the item-name rule")
+
     def test_report_templates_and_checklists_are_present(self):
         review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
         plan = (SKILL / "reference" / "capital-allocation.md").read_text(encoding="utf-8")

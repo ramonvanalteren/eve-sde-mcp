@@ -119,6 +119,12 @@ The script appends a trailing annotation to each row — the share of daily trad
 
 Yield-ranking alone favours cheap, fast items whose slots earn very little per cycle ([failure-cases.md](reference/failure-cases.md)), so it is always paired with the profit-per-slot floor below.
 
+## Report conventions
+
+- **Every item name is a code span** — in tables, lists and sentences alike: `Tracking Enhancer II`, not plain text. The user copies names straight into the in-game market search, and a code span copies in one click.
+- **Item names keep the plain ASCII apostrophe (`'`).** Renderers turn straight quotes in running text into typographic ones, and the in-game search then finds nothing; a code span prevents that. Names like `Prototype 'Arbalest' Rapid Light Missile Launcher`, `'Wetu' Mobile Depot`, `Large 'Sheriff' Shield Extender` and `Border-5 'Pochven' Filament` must never carry typographic quotes. Never type them inside a name yourself either.
+- This covers every output that names items: candidate and sizing tables, the Kill / Increase / Hold tables, stock and inventory lists, excluded-after-checks lists and the closing summary. `size_positions.py` prints plain text; put its names in code spans when carrying them into a report. (Why: [failure-cases.md](reference/failure-cases.md#typographic-quotes-in-item-names-broke-the-in-game-search-2026-10-12).)
+
 ## Slot discipline — every slot earns its place
 
 Applies to every workflow that proposes or reviews buys. The profit floor is **soft**: flag it and name the rows, never silently block, drop or resize. Parameter values and their provenance are in [reference/strategy.md](reference/strategy.md); `size_positions.py` computes all of it.

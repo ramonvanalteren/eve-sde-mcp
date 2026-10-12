@@ -48,6 +48,7 @@ Pre-send checklist:
 - [ ] Workflow 3 held units include unlisted hangar stock; cost basis is the bounded average
 - [ ] Workflow 4 section present
 - [ ] Snapshot line includes the order count, tier mix and the no-fill escrow share
+- [ ] Every item name is in a code span with plain ASCII apostrophes (SKILL.md, "Report conventions")
 ```
 
 ## Workflow 2 — Buy portfolio review (kill / increase / hold)

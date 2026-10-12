@@ -72,6 +72,7 @@ Pre-send checklist:
 - [ ] Leftover cash reported if the volume caps ran out first
 - [ ] Order count and tier mix reported before and after
 - [ ] On a refresh: executed or changed orders dropped and named; "what moved" table; said whether depth checks were repeated
+- [ ] Every item name is in a code span with plain ASCII apostrophes (SKILL.md, "Report conventions")
 - [ ] Said that nothing has been cancelled or placed
 ```
 

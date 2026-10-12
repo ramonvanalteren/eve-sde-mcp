@@ -21,6 +21,7 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [Kill verdicts built on lagging history margins (2026-10-08)](#kill-verdicts-built-on-lagging-history-margins-2026-10-08)
 - [Fills inferred from ESI daily lows instead of A4E Sold2Buy (2026-10-09)](#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09)
 - [Margins measured against a swept bid (2026-10-10)](#margins-measured-against-a-swept-bid-2026-10-10)
+- [Typographic quotes in item names broke the in-game search (2026-10-12)](#typographic-quotes-in-item-names-broke-the-in-game-search-2026-10-12)
 
 ## Sell-only items reported as buy-side verdicts (twice)
 
@@ -138,3 +139,9 @@ What changed: the old "days where the daily low was within 2% of the bid" gate w
 *Rule it motivates: the swept-bid and price-spike gates in workflow-new-candidates.md, step 3.*
 
 A fresh A4E pull listed Republic Fleet Small Cap Battery at 52% (bid 9.1M against an ask of 14.6M), Salvager II at 57% and Medium Cargohold Optimization II at 23%. Each bid was 46%, 58% and 26% below its own 7-day average: the real bids had just been swept, and the displayed margin was measured against what remained. Daily history put that item's trades between 13.8M and 15.3M over the week before, so a bid near that level would have left almost no margin. A4E's 7dBuy column shows this at a glance, so rows with 7dBuy under −5% are now rejected. In the same pull, Heron (average price up 95% in eight days), Kestrel, Expanded Probe Launcher II and Scan Rangefinding Array II had asks that had stepped 15% to over 60% within two days; those are now rejected as unproven price levels (an ask above +25% of its 7-day level, or an average price that jumped 15%+ in a day or two).
+
+## Typographic quotes in item names broke the in-game search (2026-10-12)
+
+*Rule it motivates: every item name is a code span with plain ASCII apostrophes (SKILL.md, "Report conventions").*
+
+Reports listed `Prototype 'Arbalest' Rapid Light Missile Launcher` as ordinary table text, and the renderer turned the straight apostrophes into typographic quotes. The user pastes names into the in-game market search, which matches exact characters, so the search for that item failed. The same risk applies to every name with an apostrophe (`'Wetu' Mobile Depot`, `Large 'Sheriff' Shield Extender`, `Border-5 'Pochven' Filament`). A code span keeps the characters as typed and also makes any name copyable in one click, so the rule covers all item names, not only those with apostrophes.
