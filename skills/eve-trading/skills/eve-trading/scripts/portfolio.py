@@ -17,14 +17,24 @@ Formats accepted:
     tx:      {"transactions": [{transactionId, date, typeId, quantity, unitPrice, total, isBuy}, ...]}
              or a bare list; several files are merged and de-duplicated by transactionId
     assets:  {"assets": [{typeId, quantity, locations: [{locationId, quantity}]}]}  (group_by_type)
+             or one row per stack: {"assets": [{typeId, quantity, locationId}, ...]}
+
+The assets feed holds only units that are NOT in an open sell order: listing a stack moves it out of
+the hangar. So the quantity at a station is the unlisted stock there; do not subtract listed units
+from it. The feed is cached for up to an hour, so units listed in the last hour can still show up in
+it (see `recently_listed`).
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 
 from market import JITA, parse_iso
+
+# ESI caches assets for an hour and orders for 20 minutes; a little slack on top.
+ASSET_FEED_LAG = datetime.timedelta(minutes=70)
 
 
 def _load(path):
@@ -64,35 +74,58 @@ def load_tx(*paths) -> list:
 
 
 def load_assets(path) -> dict:
-    """{type_id: {location_id: quantity}} from a group_by_type asset listing."""
+    """{type_id: {location_id: quantity}} from a group_by_type listing or from one row per stack.
+
+    Quantities add up per type and location, so several rows (or several location entries) for the
+    same place are summed, never overwritten.
+    """
     raw = _load(path)
     out = {}
     for a in raw["assets"] if isinstance(raw, dict) else raw:
         locs = a.get("locations") or [{"locationId": a.get("locationId"), "quantity": a.get("quantity", 0)}]
-        out[a["typeId"]] = {int(l["locationId"]): l["quantity"] for l in locs}
+        by_loc = out.setdefault(a["typeId"], {})
+        for l in locs:
+            loc = int(l["locationId"])
+            by_loc[loc] = by_loc.get(loc, 0) + l["quantity"]
     return out
 
 
-def unlisted_stock(assets: dict, sells: list, station: int = JITA):
-    """Units held but not covered by an open sell order.
+def unlisted_stock(assets: dict, station: int = JITA):
+    """Stock sitting in a hangar with no sell order behind it.
 
-    Returns (at_station, elsewhere): {type_id: units} for stock at `station` with no sell order
-    behind it, and {type_id: {location: units}} for stock sitting anywhere else (it cannot be
-    listed at Jita 4-4 until it is moved; containers show up here too). The assets feed lags
-    newly listed orders, so treat small gaps as provisional.
+    The assets feed leaves out units that are in open sell orders, so what it shows at `station` is
+    the unlisted stock; nothing is subtracted. Returns (at_station, elsewhere): {type_id: units} for
+    stock at `station`, and {type_id: {location: units}} for stock anywhere else (it cannot be listed
+    at Jita 4-4 until it is moved; containers show up here too). The feed is cached for up to an hour,
+    so units listed in that time may still be counted: see `recently_listed`.
     """
-    listed = {}
-    for s in sells:
-        listed[s["type_id"]] = listed.get(s["type_id"], 0) + s["remain"]
     at_station, elsewhere = {}, {}
     for t, locs in assets.items():
-        gap = locs.get(station, 0) - listed.get(t, 0)
-        if gap > 0:
-            at_station[t] = gap
-        rest = {l: q for l, q in locs.items() if l != station}
+        if locs.get(station, 0) > 0:
+            at_station[t] = locs[station]
+        rest = {l: q for l, q in locs.items() if l != station and q > 0}
         if rest:
             elsewhere[t] = rest
     return at_station, elsewhere
+
+
+def recently_listed(sells: list, now, window=ASSET_FEED_LAG) -> set:
+    """Type ids with a sell order issued (or repriced, which resets `issued`) inside the feed's lag.
+
+    For these the assets feed may still show units that have just been listed, so their unlisted
+    count is an upper bound until the feed catches up.
+    """
+    return {s["type_id"] for s in sells if s.get("issued") and now - parse_iso(s["issued"]) <= window}
+
+
+def held_stock(sells: list, unlisted: dict):
+    """{type_id: units held for sale}: units in open sell orders plus unlisted stock at the station."""
+    held = {}
+    for s in sells:
+        held[s["type_id"]] = held.get(s["type_id"], 0) + s["remain"]
+    for t, q in unlisted.items():
+        held[t] = held.get(t, 0) + q
+    return held
 
 
 def bounded_cost(buy_txs: list, held: int):

@@ -22,6 +22,7 @@ Every rule in this skill that looks unusually specific exists because a real mis
 - [Fills inferred from ESI daily lows instead of A4E Sold2Buy (2026-10-09)](#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09)
 - [Margins measured against a swept bid (2026-10-10)](#margins-measured-against-a-swept-bid-2026-10-10)
 - [Typographic quotes in item names broke the in-game search (2026-10-12)](#typographic-quotes-in-item-names-broke-the-in-game-search-2026-10-12)
+- [Assets feed treated as including listed units (2026-11-05)](#assets-feed-treated-as-including-listed-units-2026-11-05)
 
 ## Sell-only items reported as buy-side verdicts (twice)
 
@@ -145,3 +146,9 @@ A fresh A4E pull listed Republic Fleet Small Cap Battery at 52% (bid 9.1M agains
 *Rule it motivates: every item name is a code span with plain ASCII apostrophes (SKILL.md, "Report conventions").*
 
 Reports listed `Prototype 'Arbalest' Rapid Light Missile Launcher` as ordinary table text, and the renderer turned the straight apostrophes into typographic quotes. The user pastes names into the in-game market search, which matches exact characters, so the search for that item failed. The same risk applies to every name with an apostrophe (`'Wetu' Mobile Depot`, `Large 'Sheriff' Shield Extender`, `Border-5 'Pochven' Filament`). A code span keeps the characters as typed and also makes any name copyable in one click, so the rule covers all item names, not only those with apostrophes.
+
+## Assets feed treated as including listed units (2026-11-05)
+
+*Rule it motivates: unlisted stock is what the assets feed shows at Jita 4-4; listed units are never subtracted from it (Workflow 4, step 1; `portfolio.unlisted_stock`).*
+
+`unlisted_stock` computed the gap as assets at Jita 4-4 minus units in open sell orders, on the assumption that the feed counts listed stacks. It does not: a stack moves out of the hangar when it is listed. For a type that was only partly listed the gap came out too small or zero, so the reviews under-reported unlisted stock. On 2026-11-04 `Cargo Scanner II` showed 48 held with 27 listed and 21 unlisted against a feed that held 21; the ledger net flow (buys minus sells) confirmed 48. The `extend` table had the mirror error: its stock column counted listed units only, so days of cover looked shorter than they were for types with unlisted stock (`Core Probe Launcher II` showed 5.6 days against 8.8 once the 61 unlisted units were counted). The workaround for a day was to feed the script raw plus listed units, and a first attempt at that failed too, because the loader kept only one of two entries for the same location. The loader now sums repeated locations and rows, the script adds unlisted stock instead of netting it, and types listed or repriced in the last hour are marked because the feed is cached for up to an hour.

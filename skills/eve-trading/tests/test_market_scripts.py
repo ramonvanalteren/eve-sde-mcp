@@ -177,12 +177,32 @@ class CharacterFiles(unittest.TestCase):
         avg, got, _ = portfolio.bounded_cost(buys, 100)
         self.assertEqual(got, 73)                                           # history shorter than the holding: say so
 
-    def test_unlisted_stock_splits_station_and_elsewhere(self):
+    def test_unlisted_stock_is_what_the_assets_feed_shows_at_the_station(self):
+        # The feed leaves out units in sell orders, so nothing is subtracted for listings.
         assets = {1: {market.JITA: 10, 99: 3}, 2: {market.JITA: 5}, 3: {55: 4}}
-        sells = [dict(type_id=1, remain=6), dict(type_id=2, remain=5)]
-        at_station, elsewhere = portfolio.unlisted_stock(assets, sells)
-        self.assertEqual(at_station, {1: 4})
+        at_station, elsewhere = portfolio.unlisted_stock(assets)
+        self.assertEqual(at_station, {1: 10, 2: 5})
         self.assertEqual(elsewhere, {1: {99: 3}, 3: {55: 4}})
+
+    def test_load_assets_sums_repeated_locations_and_rows(self):
+        grouped = {"assets": [{"typeId": 1, "quantity": 39, "locations": [
+            {"locationId": market.JITA, "quantity": 7}, {"locationId": market.JITA, "quantity": 32}]}]}
+        rows = {"assets": [dict(typeId=2, quantity=4, locationId=market.JITA), dict(typeId=2, quantity=6, locationId=market.JITA),
+                           dict(typeId=2, quantity=1, locationId=99)]}
+        with tempfile.TemporaryDirectory() as d:
+            pg, pr = Path(d) / "g.json", Path(d) / "r.json"
+            pg.write_text(json.dumps(grouped))
+            pr.write_text(json.dumps(rows))
+            self.assertEqual(portfolio.load_assets(pg), {1: {market.JITA: 39}})
+            self.assertEqual(portfolio.load_assets(pr), {2: {market.JITA: 10, 99: 1}})
+
+    def test_recently_listed_flags_orders_inside_the_feed_lag(self):
+        sells = [dict(type_id=1, remain=1, issued=iso(0.5)), dict(type_id=2, remain=1, issued=iso(3)), dict(type_id=3, remain=1, issued=None)]
+        self.assertEqual(portfolio.recently_listed(sells, NOW), {1})
+
+    def test_held_stock_adds_unlisted_units_to_listed_ones(self):
+        sells = [dict(type_id=1, remain=6), dict(type_id=1, remain=2), dict(type_id=2, remain=5)]
+        self.assertEqual(portfolio.held_stock(sells, {1: 4, 3: 7}), {1: 12, 2: 5, 3: 7})
 
 
 class Gates(unittest.TestCase):
