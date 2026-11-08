@@ -129,6 +129,7 @@ class A4EParsing(unittest.TestCase):
             return "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
         header = ["Name"] + ["h"] * (len(a4e.COLUMNS) - 1)
+        # volume cells 400 (BuyfSell) / 73 (Sold2Buy); trades cells 67 (BuyfSell) / 50 (Sold2Buy)
         row = ["Large Micro Jump Drive", "", "480.000", "21,2", "2.265.000", "2.745.000", "322", "900.000.000", "7", "4,8", "7,1",
                "", "", "", "", "", "", "400", "73", "", "", "67", "50", "", "", "", "", "", ""]
         html = "<table>" + tr(header) + tr(row) + "</table>"
@@ -136,7 +137,24 @@ class A4EParsing(unittest.TestCase):
         self.assertIsNone(parsed[0])
         self.assertEqual(parsed[1]["name"], "Large Micro Jump Drive")
         self.assertEqual((parsed[1]["buy"], parsed[1]["sell"], parsed[1]["tr"]), (2265000.0, 2745000.0, 322.0))
-        self.assertEqual((parsed[1]["s2b_vol"], parsed[1]["s2b_trd"], parsed[1]["d7buy"], parsed[1]["d7sell"]), (73.0, 67.0, 4.8, 7.1))
+        self.assertEqual((parsed[1]["s2b_vol"], parsed[1]["s2b_trd"], parsed[1]["d7buy"], parsed[1]["d7sell"]), (73.0, 50.0, 4.8, 7.1))
+
+    def test_trades_pair_is_buyfsell_then_sold2buy_despite_the_page_header(self):
+        """The page header says Sold2Buy, BuyfSell for the trades group, but the cells follow the volume group's order.
+
+        Real row from the 2026-11-08 pull (cells 17-23: volumes 264 / 7, ratio 37,7; trades 44 / 2, ratio 22,0).
+        Read the header's way, Sold2Buy would be 7 units over 44 trades, which cannot happen.
+        """
+        row = ["Small Trimark Armor Pump II", "", "475.440", "12,0", "3.946.000,00", "4.670.000,00", "108", "2.015.514.379", "3,0",
+               "40,9", "3,2", "38,9", "-29,6", "1", "5", "2", "9", "264", "7", "37,7", "", "44", "2", "22,0", "-", "-", "-", "-", "0.4h"]
+        self.assertEqual(len(row), len(a4e.COLUMNS))
+        parsed = a4e.parse_row(a4e.table_rows("<table><tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr></table>")[0])
+        self.assertEqual((parsed["s2b_vol"], parsed["s2b_trd"], parsed["b4s_vol"], parsed["b4s_trd"]), (7.0, 2.0, 264.0, 44.0))
+        # units sold per side can never be below the trades that moved them, and the ratio cells agree with the labels
+        self.assertGreaterEqual(parsed["s2b_vol"], parsed["s2b_trd"])
+        self.assertGreaterEqual(parsed["b4s_vol"], parsed["b4s_trd"])
+        self.assertAlmostEqual(parsed["b4s_vol"] / parsed["s2b_vol"], 37.7, delta=0.05)
+        self.assertAlmostEqual(parsed["b4s_trd"] / parsed["s2b_trd"], 22.0, delta=0.05)
 
     def test_tier_urls_match_the_ones_in_workflow_new_candidates(self):
         text = (SKILL / "reference" / "workflow-new-candidates.md").read_text(encoding="utf-8")

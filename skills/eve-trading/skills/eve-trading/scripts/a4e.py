@@ -16,9 +16,11 @@ bands, because the bands drop the fast, thin-margin items the 7.5% high-velocity
 floor exists for. If the fee profile ever changes, update `buyFee`/`sellFee`/
 `salesTax` here, in the markdown, and in market.py together.
 
-The table cell order is `COLUMNS` below (verified against the live page on 2026-10-10).
+The table cell order is `COLUMNS` below (verified against the live page on 2026-10-10;
+the trades pair corrected on 2026-11-08, see the comment on `COLUMNS`).
 A4E reports Sold2Buy/BuyfSell as confirmed 7-day averages per day: `S2B_vol`/`S2B_trd`
-are units and trades per day sold INTO buy orders, which is what fills a bid.
+are units and trades per day sold INTO buy orders, which is what fills a bid. In both
+the volume and the trades group the BuyfSell cell comes first and Sold2Buy second.
 """
 
 from __future__ import annotations
@@ -31,10 +33,19 @@ import urllib.request
 import concurrent.futures as cf
 from pathlib import Path
 
+# The page header is misleading for the trades group. It reads `BuyfSell, Sold2Buy, Ratio`
+# under "A4E tracker: Volume" but `Sold2Buy, BuyfSell, Ratio` under "A4E tracker: Trades",
+# yet the trades CELLS are in the same order as the volume cells: BuyfSell first, Sold2Buy
+# second. Evidence (found 2026-11-08): `Small Trimark Armor Pump II` shows volumes 264 / 7
+# with ratio 37,7 (= 264/7, so 264 is BuyfSell and 7 is Sold2Buy) and trades 44 / 2 with
+# ratio 22,0 (= 44/2, same order). Read the header's way, S2B would be 7 units over 44
+# trades, which is impossible. Across the 462 rows of a fresh pull, 161 rows had units
+# below trades under the header's order and none had it under this one. Do not "fix" this
+# back to match the header; tests/test_market_scripts.py pins it.
 COLUMNS = [
     "name", "_", "spread", "spread%", "buy", "sell", "avgTrades", "avgISK", "days", "7dBuy", "7dSell",
     "7dBuyVol", "7dSellVol", "sell3h", "sell24h", "buy3h", "buy24h", "B4S_vol", "S2B_vol", "ratio_vol", "_2",
-    "S2B_trd", "B4S_trd", "ratio_trd", "myBuy", "mySell", "T2B", "T2S", "age",
+    "B4S_trd", "S2B_trd", "ratio_trd", "myBuy", "mySell", "T2B", "T2S", "age",
 ]
 
 _BASE = (
