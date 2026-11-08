@@ -61,7 +61,7 @@ Stdlib-only Python 3.9+, in this skill's `scripts/` folder; run from that folder
 |---|---|
 | `a4e.py fetch DIR` | Save the raw A4E pages for Workflow 1: three saved tiers plus the high-velocity supplement. Raw, because the fill-evidence gates need columns a summary drops. |
 | `scan_candidates.py` | Workflow 1: live two-call margin on every A4E row, then the fill-evidence, swept-bid, spike and floor gates; prints passes ranked by M/1M/day and every rejection with its reason. |
-| `review_portfolio.py buys` / `sells` / `extend` | Workflow 2 live margins with a KILL? / EDGE / ok hint; Workflow 3 bounded-cost table with unlisted stock; held types ranked by days of cover for Increases. |
+| `review_portfolio.py buys` / `sells` / `extend` | Workflow 2 live margins with a KILL? / EDGE / ok hint; Workflow 3 bounded-cost table with unlisted stock (`--assets`); held types ranked by days of cover for Increases (`--assets` adds unlisted stock to the cover). |
 | `depth.py` | The depth checklist for a few items; `--diff SECONDS` for a two-snapshot fill test; `--breakeven TYPE:COST:UNITS` for stock held back from sale. |
 | `size_positions.py` | Sizing, ranking and the buffer walk (below). |
 | `market.py`, `portfolio.py` | Shared helpers: ESI books and history, the margin formula, the competitive bid, the character-file loaders. Not run directly. |
