@@ -4,7 +4,7 @@ review_portfolio.py — live-margin tables for Workflows 2 and 3, and extension 
 
     python scripts/review_portfolio.py buys   --orders orders.json --tx tx.json
     python scripts/review_portfolio.py sells  --orders orders.json --tx tx.json [--assets assets.json]
-    python scripts/review_portfolio.py extend --orders orders.json --tx tx.json [--a4e-dir a4e/]
+    python scripts/review_portfolio.py extend --orders orders.json --tx tx.json [--assets assets.json] [--a4e-dir a4e/]
 
 Common options: --killed IDS (never extended), --hv-floor 7.5 (default; --no-hv disables),
 --a4e-dir DIR (adds A4E trades/day to the high-velocity test and the Sold2Buy evidence).
@@ -26,10 +26,15 @@ buys   One row per open buy order, from public ESI books (two-call margin at the
 sells  One row per type held for sale (sell orders + unlisted hangar stock): bounded weighted-average
        cost of the newest lots covering the held units, margin at the top and durable ask and at the
        character's own price, sales in the last 24h and since the feed began, and how many cheaper units
-       sit ahead. `unl` is stock at Jita 4-4 with no sell order (needs --assets); stock elsewhere is listed
-       separately because it cannot be sold until it is moved.
+       sit ahead. `unl` is stock at Jita 4-4 with no sell order (needs --assets). The assets feed leaves
+       out units that are in sell orders, so `unl` is simply what the feed shows at Jita 4-4. The feed
+       is cached for up to an hour: a type listed or repriced in that time is marked `*`, because its
+       `unl` may still include units that were just listed. Stock elsewhere is listed separately
+       because it cannot be sold until it is moved.
 extend Held types ranked by days of cover (stock + open buy units over the 3-day sales pace) with live
        margin and A4E Sold2Buy evidence — candidates for an Increase, subject to the runway check.
+       `stock` is listed units plus, with --assets, the unlisted stock at Jita 4-4; without --assets
+       it counts listed units only and the cover is overstated for types with unlisted stock.
 """
 
 from __future__ import annotations
@@ -149,14 +154,14 @@ def cmd_buys(args) -> int:
 def cmd_sells(args) -> int:
     orders, tx, killed, rows, hv_floor = context(args)
     sells, buys = orders["sells"], orders["buys"]
-    at_station, elsewhere, unl = {}, {}, {}
+    elsewhere, unl = {}, {}
     if args.assets:
-        at_station, elsewhere = portfolio.unlisted_stock(portfolio.load_assets(args.assets), sells)
-        unl = at_station
+        unl, elsewhere = portfolio.unlisted_stock(portfolio.load_assets(args.assets))
     types = sorted({s["type_id"] for s in sells} | set(unl))
     names = names_for(types)
     data = market.fetch_many(types)
     now = market.now_utc()
+    fresh = portfolio.recently_listed(sells, now)
     buy_types = {b["type_id"] for b in buys}
     rowsout = []
     for t in types:
@@ -174,7 +179,7 @@ def cmd_sells(args) -> int:
         s24 = sum_qty(tx, t, False, now - datetime.timedelta(days=1))
         sp = [x for x in tx if x["typeId"] == t and not x["isBuy"] and (now - x["dt"]).total_seconds() <= 86400]
         rowsout.append(dict(
-            name=(names.get(t) or str(t))[:36], held=held, listed=listed, unl=unl.get(t, 0), own=own, ask=ask, ask_d=ask_d,
+            t=t, name=(names.get(t) or str(t))[:36], held=held, listed=listed, unl=unl.get(t, 0), own=own, ask=ask, ask_d=ask_d,
             avg=avg, got=got, m_dur=net(ask_d), m_own=net(own), s24=s24, s10=sum_qty(tx, t, False),
             real24=(sum(x["total"] for x in sp) / sum(x["quantity"] for x in sp)) if sp else None,
             v3=statistics.mean(r["volume"] for r in sorted(h, key=lambda r: r["date"])[-3:]) if h else 0,
@@ -185,10 +190,14 @@ def cmd_sells(args) -> int:
           f"{'m@dur':>7s}{'m@own':>7s}{'s24h':>5s}{'sTot':>5s}{'real24h':>12s}{'v3':>6s}{'buyO':>5s}{'cheaper':>8s}")
     for r in sorted(rowsout, key=lambda r: -(r["held"] * (r["own"] or r["ask"] or 0))):
         flag = "  <- cost covers only %d of %d units" % (r["got"], r["held"]) if r["avg"] and r["got"] < r["held"] else ""
-        print(f"{r['name']:36s}{r['held']:5d}{r['listed']:4d}{r['unl']:4d}{fm(r['own']):>12s}{fm(r['ask']):>12s}{fm(r['ask_d']):>12s}"
+        unl_txt = f"{r['unl']}{'*' if r['unl'] and r['t'] in fresh else ''}"
+        print(f"{r['name']:36s}{r['held']:5d}{r['listed']:4d}{unl_txt:>4s}{fm(r['own']):>12s}{fm(r['ask']):>12s}{fm(r['ask_d']):>12s}"
               f"{fm(r['avg']):>12s}{r['got']:5d}{fm(r['m_dur'], 1):>7s}{fm(r['m_own'], 1):>7s}{r['s24']:5d}{r['s10']:5d}"
               f"{fm(r['real24']):>12s}{r['v3']:6.0f}{str(r['buyo'])[0]:>5s}{r['cheaper']:8d}{flag}")
     print(f"listed value {sum(s['remain'] * s['price'] for s in sells) / 1e6:,.0f}M")
+    if any(r["unl"] and r["t"] in fresh for r in rowsout):
+        print("* listed or repriced in the last hour: the assets feed (cached up to an hour) may still count "
+              "those units as unlisted, so `unl` is an upper bound for them")
     if args.assets and elsewhere:
         print("stock at other locations (cannot be listed at Jita 4-4 until moved):",
               {names_for([t]).get(t, t): v for t, v in list(elsewhere.items())[:15]})
@@ -200,9 +209,8 @@ def cmd_sells(args) -> int:
 def cmd_extend(args) -> int:
     orders, tx, killed, rows, hv_floor = context(args)
     buys, sells = orders["buys"], orders["sells"]
-    stock, buy_rem = collections.Counter(), collections.Counter()
-    for s in sells:
-        stock[s["type_id"]] += s["remain"]
+    unlisted = portfolio.unlisted_stock(portfolio.load_assets(args.assets))[0] if args.assets else {}
+    stock, buy_rem = collections.Counter(portfolio.held_stock(sells, unlisted)), collections.Counter()
     for b in buys:
         buy_rem[b["type_id"]] += b["remain"]
     ignore = portfolio.parse_id_list(args.ignore)
@@ -229,6 +237,13 @@ def cmd_extend(args) -> int:
               f"{f(a.get('s2b_vol')):>7s}{f(a.get('s2b_trd')):>7s}{f(a.get('d7buy'), '{:.1f}'):>7s}{f(a.get('d7sell'), '{:.1f}'):>7s}"
               f"{v['fresh_fills']:>4d}/{v['near']:<2d}")
     print("\nAn Increase also needs the runway check (open units against the recent sales pace) and a live margin above the floor.")
+    if not args.assets:
+        print("(no --assets: `stock` counts listed units only, so cover is overstated for types with unlisted hangar stock)")
+    else:
+        fresh = portfolio.recently_listed(sells, market.now_utc()) & {t for t in unlisted if t in types}
+        if fresh:
+            print("(listed or repriced in the last hour, so the assets feed may still count some of their units twice: "
+                  + ", ".join(names.get(t) or str(t) for t in sorted(fresh)) + ")")
     return 0
 
 
@@ -237,7 +252,7 @@ def main(argv=None) -> int:
     ap.add_argument("command", choices=["buys", "sells", "extend"])
     ap.add_argument("--orders", required=True)
     ap.add_argument("--tx", nargs="*", default=[], help="one or more get_wallet_transactions result files")
-    ap.add_argument("--assets")
+    ap.add_argument("--assets", help="get_character_assets result (the feed omits units that are in sell orders)")
     ap.add_argument("--a4e-dir")
     ap.add_argument("--killed", default="")
     ap.add_argument("--ignore", default="", help="type ids to leave out of `extend` (production stock, hold containers)")
