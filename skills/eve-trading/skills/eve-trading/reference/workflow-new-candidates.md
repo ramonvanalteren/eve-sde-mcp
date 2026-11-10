@@ -7,7 +7,8 @@ The mechanical part is scripted (stdlib Python, run from this skill's folder; th
 ```bash
 python scripts/a4e.py fetch a4e/                       # raw A4E pages: three saved tiers + the high-velocity pull
 python scripts/scan_candidates.py --a4e-dir a4e/ --orders orders.json \
-    --killed <ids> --exclude-prefix "<family>,<family>" --extra-held <ids>   # live verification + gates
+    --killed <ids> --exclude-prefix "<family>,<family>" --extra-held <ids>   # live verification + gates (default mode)
+python scripts/scan_candidates.py ... --safe                                 # the same scan with the original gate set
 python scripts/depth.py <type ids> --orders orders.json                      # depth checklist on the rows you will recommend
 python scripts/size_positions.py plan.json                                   # sizing, ranking, buffer walk
 ```
@@ -17,8 +18,8 @@ Judgement stays with you: which rows to recommend, the depth read, the unit coun
 ## Contents
 - [Step 1 — fetch the A4E pages](#step-1--fetch-the-a4e-pages)
 - [Step 2 — what never enters the scan](#step-2--what-never-enters-the-scan)
-- [Step 3 — scan: live margin and the gates](#step-3--scan-live-margin-and-the-gates)
-- [Steps 4–8 — depth, size, present, repeat-cancels](#steps-48)
+- [Step 3 — scan: live margin and the gates](#step-3--scan-live-margin-and-the-gates) (two modes: default and `--safe`)
+- [Steps 4–8 — depth, size, present, repeat-opens](#steps-48)
 
 ## Step 1 — fetch the A4E pages
 
@@ -51,23 +52,41 @@ Drop these before any live call:
 
 **Floors.** The entry floor by tier, with the T3 carve-out, is in [margin-verification.md](margin-verification.md) ("Margin thresholds"). The **high-velocity relaxation** — the user's allowance of a lower floor for sufficiently fast items — applies to rows with A4E trades/day, 3-day volume and order counts above the bar defined there; a row that clears only through it is labelled "HV floor" in the output and must be labelled the same in the report. `--no-hv` turns it off.
 
-**Hard gates — a row that trips any of these is rejected and listed with the reason:**
+### Modes: default and `--safe`
 
-| Gate | Rejects when | Why it exists |
-|---|---|---|
-| Margin | live margin at the competitive bid, against the sell reference, is under the floor | the basic floor test; the sell reference is the top ask, or the median recent high when the ask has not traded |
-| Fill, A4E | Sold2Buy under 20 units/day or under 15 trades/day | sellers are not reaching buy orders at a useful rate |
-| Fill, live book | no young (under 24h) partly-filled bid within 2% of the top | nobody has sold into that price today |
-| Swept bid | A4E 7dBuy under −5% | the best bid sits far below its own 7-day average: the top bids were just eaten and the screen margin is measured against a bid that will not last |
-| Falling ask | A4E 7dSell under −12% | the sell side is dropping |
-| Price spike | A4E 7dSell over +25%, or the average price jumped 15%+ in the last one or two days | an unproven price level that can revert |
-| Thin | one unit increment already exceeds the top of the sizing band of daily trades | cannot be sized to the market |
-| Stale | the top asks are over 14 days old | abandoned listings, not a real price |
-| Repeat cancels | 2+ earlier buys cancelled under half filled (needs `--ledger`/`--character-id`) | step 8 |
+The scan runs in one of two modes and prints which one on its first lines; **say which mode ran in the report.**
+
+- **Default (relaxed), since 2026-11-10.** With idle cash a bid that never fills costs its broker fee (0.5% at placement, about 0.5% per reprice) and nothing else, so the checks that only ask "will it fill?" are soft flags for T2 and T3 rows. The checks that ask "will the price hold after it fills?" stay as gates, and one is added: the margin at the item's **5-day volume-weighted traded price** must stay within 1 point of the entry floor. Default mode, in full:
+  1. Sold2Buy minimum and "no fresh fills" become soft flags (`slow fills S2B …`, `no fresh fills in top bids`) for **T2 and T3** rows. T1 and T4+ rows keep both as hard gates.
+  2. Sizing: T2/T3 rows are capped at **two days** of Sold2Buy volume (safe mode: one); rows priced at or above the T3 floor (T3, T4+) are sized in **pairs**, not fives, and the thin gate uses the pair.
+  3. Swept bid rejects only when the ask is also weakening (A4E 7dSell under −5%, or unknown). Otherwise it is a soft flag and the row is **sized at half**: the order is a low bid that fills during dumps.
+  4. New hard gate **margin at traded price**: margin at the 5-day volume-weighted traded price under floor − 1 rejects; between floor − 1 and the floor it is a soft flag. History is Forge-wide and includes trades into bids, so it understates sell prices a little; it is a floor test, not a forecast.
+  5. Profit and the M/1M/day rank use the lower of the ask and the traded price (`profit_at_ask` keeps the old figure in the JSON), so a spiky ask cannot rank a row first.
+  Margin floors, falling ask, ask spike, stale asks and repeat-open are unchanged.
+- **`--safe`.** The original gate set, unchanged: every fill check is a hard gate in every tier, a swept bid always rejects, sizing is capped at one day of Sold2Buy in units of 5, and there is no traded-price test. Use it when you want only rows with direct fill evidence, or to reproduce an older scan.
+
+**Why the default changed.** Not filling is cheap and the gates were expensive: in the 2026-11-10 scan 181 of 231 T1–T3 rows failed the Sold2Buy gate. In the 145 Perimeter buys closed since 2026-10-10, about 39.6M of 83.2M estimated placement fees went on volume that never filled (about 2.5% of the 1,582M realized net), and the ledger's re-listing fees (buy and sell sides together) added about 37M (about 2.4%). Sold2Buy did not separate good fillers from bad ones there (passing rows: 8% zero-fill, median fill 98%; failing rows: 8% and 100%) — a small sample, chosen under the gates, with today's Sold2Buy values, so treat it as the absence of evidence for the gate rather than proof against it. The other gates could not be tested (no historical snapshots).
+
+**What the relaxation costs.** A relaxed row can sit for days: fills come in dumps and the order may need a reprice. Each reprice is about another 0.5% of its value, so on a 10% margin a bid needs to fill only about 5% of its size to pay for the placement, but about 25% after four reprices. Keep reprices of slow bids to a minimum; the repeat-open check is the stop-loss (two openings cancelled under half filled end the item, so the loss per item stays near two placement fees).
+
+**Hard gates — a row that trips any of these is rejected and listed with the reason** (the last column is what changes in the default mode; `--safe` applies the table as written without it):
+
+| Gate | Rejects when | Why it exists | Default mode |
+|---|---|---|---|
+| Margin | live margin at the competitive bid, against the sell reference, is under the floor | the basic floor test; the sell reference is the top ask, or the median recent high when the ask has not traded | same |
+| Margin at traded price | margin at the 5-day volume-weighted traded price is under floor − 1 | an ask that sits well above where the item actually trades | **new hard gate** |
+| Fill, A4E | Sold2Buy under 20 units/day or under 15 trades/day | sellers are not reaching buy orders at a useful rate | soft flag for T2/T3 |
+| Fill, live book | no young (under 24h) partly-filled bid within 2% of the top | nobody has sold into that price today | soft flag for T2/T3 |
+| Swept bid | A4E 7dBuy under −5% | the best bid sits far below its own 7-day average: the top bids were just eaten and the screen margin is measured against a bid that will not last | rejects only with 7dSell under −5% or unknown; else soft flag, half size |
+| Falling ask | A4E 7dSell under −12% | the sell side is dropping | same |
+| Ask spike | A4E 7dSell over +25% | the ask is far above its own 7-day level: an unproven price level that can revert | same |
+| Thin | one unit increment already exceeds the top of the sizing band of daily trades | cannot be sized to the market | increment 2 at or above the T3 floor |
+| Stale | the top asks are over 14 days old | abandoned listings, not a real price | same |
+| Repeat opens | 2+ earlier buys of the type cancelled under half filled — opened repeatedly without filling. On by default; the run prints whether the check is on | step 8 | same; it is the fee stop-loss |
 
 The thresholds are working values from the 9–10 October 2026 sessions, set from the user's corrections ([failure-cases.md](failure-cases.md#fills-inferred-from-esi-daily-lows-instead-of-a4e-sold2buy-2026-10-09)) and one day's worth of rejected rows — they have not been back-tested. Change them in `scripts/scan_candidates.py` and here together.
 
-**Soft flags** stay on the row for the caller to weigh: cushion under 2 points over the floor, thin top of the ask, ask 20–25% over its 7-day level, bids rising over 15% above their 7-day level, an 8-day average-price range over 25%, an 8–15% price step, the high-velocity relaxation, and "S2B-capped" (units limited by the next step).
+**Soft flags** stay on the row for the caller to weigh: cushion under 2 points over the floor, thin top of the ask, ask 20–25% over its 7-day level, bids rising over 15% above their 7-day level, an 8-day average-price range over 25%, a price step of 8%+ in two days (flagged, never rejected), one earlier buy cancelled under half filled, the high-velocity relaxation, and "S2B-capped" (units limited by the next step). The default mode adds `slow fills S2B …`, `no fresh fills in top bids` (T2/T3), `bid swept …, half size` and `traded-price margin` (inside the 1-point slack). Read them: a relaxed row is a candidate for the depth checklist, not an order.
 
 ## Steps 4–8
 
@@ -79,16 +98,17 @@ The thresholds are working values from the 9–10 October 2026 sessions, set fro
      - **Fresh undercut vs durable ask.** If the best ask is a recent order undercutting a settled price (e.g. a fresh 20-unit order), compute the margin at the durable ask as well and say which one the recommendation rests on. Same signature as the "thin single-unit outlier" case in margin-verification.md, but with a bigger order.
      - **Stale asks.** Sell orders weeks old at the top (or an old stack holding the price up) can be abandoned listings that don't reflect where the item actually trades; treat the margin as unreliable and prefer to exclude.
      - **Thin top of the ask.** A few units at the top then a gap to a much higher price means the realistic sale price drops as soon as those clear — size smaller or exclude.
-     - **A price that just stepped.** An average price that jumped in the last day or two (bids and asks both) may be a new level or a spike; the scan rejects 15%+ and flags 8–15%. Read the history before accepting a flagged row, and prefer rows whose bids followed the ask up (7dBuy at or above zero).
+     - **A price that just stepped.** An average price that jumped in the last day or two (bids and asks both) may be a new level or a spike. The scan flags 8%+ and does not reject it; the repeat-open check (step 8) is what screens out items that keep failing to fill. Read the history before accepting a flagged row, and prefer rows whose bids followed the ask up (7dBuy at or above zero).
      - **Bids queued ahead.** If hundreds of units of bids sit at the top, the order would have to bid above them to be filled at all; recompute the margin at that bid.
      - **Bid far below ask.** A bid placed well below the ask (tens of percent) never meets a seller *if no seller reaches that price* — check the fill evidence (Sold2Buy, fresh fills, `depth.py --diff`) before concluding that, rather than inferring it from the gap.
      - **Margin cushion.** Note the cushion over the tier's entry floor. Under about 3 points on a volatile item (filaments, mutaplasmids) is a caution on the row, or an exclusion if the book is thin as well.
-     - **Cancelled-at-zero-fills history.** Even a single recent cancel at zero fills is worth a one-line caution; step 8 below covers the 2+ repeat-offender case.
+     - **Cancelled-at-zero-fills history.** Even a single recent cancel at zero fills is worth a one-line caution (the scan flags one earlier cancel under half filled); step 8 below covers the 2+ repeat-offender case.
      - **Disputed fills.** If the A4E columns and the live book disagree, or the user questions a fill claim, run `depth.py --diff 340 <type ids>` (two buy-side snapshots about five minutes apart) and quote the units sold into each bid.
      Anything excluded here — or rejected by the scan — goes in an "excluded after checks" list with its reason, so the user sees what was rejected and why.
-5. **Size.** Units are the sizing band of A4E trades/day in multiples of the unit increment (SKILL.md, sizing rule), **capped at one day of A4E Sold2Buy volume** — an order larger than a day of sellers sits for days, and the scan's `units` column already applies the cap. Hand the chosen unit counts to `scripts/size_positions.py` with the verified bid, margin at the ask and `profit_per_unit`; it ranks by M/1M/day, walks the buffer and flags SMALL-SLOT rows.
+5. **Size.** Units are the sizing band of A4E trades/day in multiples of the unit increment (SKILL.md, sizing rule), **capped at one day of A4E Sold2Buy volume** (two days for T2/T3 rows in the default mode) — an order larger than the cap sits for days, and the scan's `units` column already applies it. In the default mode rows at or above the T3 floor are sized in pairs and a row that clears with a swept bid is sized at half. Hand the chosen unit counts to `scripts/size_positions.py` with the verified bid, margin at the ask and `profit_per_unit`; it ranks by M/1M/day, walks the buffer and flags SMALL-SLOT rows.
 6. Present candidates with: item name (as a code span, SKILL.md "Report conventions"), live-verified margin % (from the combined two-call calculation), daily trade count, the sized units as a share of daily trades, a one-line rationale, and a **suggested starting size** (units + ISK) per the sizing rule in SKILL.md. Label every row that relies on the high-velocity relaxation. Rows below the profit-per-slot floor are flagged, and the proposal reports the order count and tier mix before and after (SKILL.md, "Slot discipline"). Include the excluded-after-checks list and the families skipped under step 2. When the request is a full redeploy, follow [capital-allocation.md](capital-allocation.md).
 7. Do NOT flag or comment on the character's existing open orders for the same item in this workflow — that's the portfolio review's job.
-8. **Repeat-cancellation check — targeted, not blanket.** Runs only when reopening a candidate the user has held and killed before (recognizable from conversation context or memory, e.g. it was in a recent kill list), not on every scan. The scan applies it to every row when given the ledger; by hand:
-   - Don't re-add it on today's margin alone. Call `get_order_history(type_id=X, side="buy", state="cancelled")` — it returns only that item's cancelled buys, so no client-side filtering.
-   - If it shows 2+ prior buy orders cancelled while less than half filled (`volumeRemain` close to `volumeTotal`), treat it as weak: say so plainly, and recommend reopening only if today's margin is meaningfully above threshold, not barely over — otherwise expect the same open-barely-fill-cancel cycle.
+8. **Repeat-open check — on for every scan row.** An item that was opened more than once and never filled is a weak candidate however good today's margin looks: the same open, wait, cancel cycle costs a broker fee each time and ties up escrow. The scan reads the ledger's order history (`~/.eve-sde/ledger.db`; run `sync_wallet_ledger` first, since it is only as current as the last sync) and finds the character from the open buys in `--orders`. It prints `repeat-open check ON` or `OFF` with the reason on its first lines — if it says OFF, say so in the report and do the manual check below for every row you recommend.
+   - **2+ earlier buys of the type cancelled while less than half filled** reject the row ("opened Nx without filling"). A reprice keeps its `order_id`, so it does not count as another opening. One such cancel is a soft flag: say so on the row.
+   - **Manual check** (ledger stale, or a type the scan did not reach): `get_order_history(type_id=X, side="buy", state="cancelled")` returns only that item's cancelled buys. Count those with `volumeRemain` close to `volumeTotal`.
+   - **If the user wants a rejected row anyway**, recommend it only when today's margin is meaningfully above threshold, not barely over, and expect the same open-barely-fill-cancel cycle.
