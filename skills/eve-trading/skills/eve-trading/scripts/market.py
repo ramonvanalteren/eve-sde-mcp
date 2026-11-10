@@ -13,8 +13,10 @@ What lives here, and why it matters:
 * `reaches_jita(order)` — whether a buy order can serve a seller at Jita 4-4
   (at the station, region-wide, or in Perimeter with range >= 1 jump).
 * `analyse(...)` — one item's live picture: competitive bid, top and durable ask,
-  margin at each, ask-ladder shape, 3-day history references, and the fill
-  evidence in the live book (young, partly-filled bids near the top).
+  margin at each, ask-ladder shape, 3-day history references, the margin at the
+  5-day volume-weighted traded price (`nm_real`, a sell-side check: what the item
+  actually trades at, not what is asked), and the fill evidence in the live book
+  (young, partly-filled bids near the top).
 
 The fee profile below is the one in margin-verification.md. If the fee profile or
 either location changes, change it there, in the A4E URLs (a4e.py) and here.
@@ -150,7 +152,11 @@ def history_stats(h, bid: float, ask: float) -> dict:
     step = 0.0   # biggest jump of the last one or two days' average over the days before it, %
     if len(avgs) >= 4:
         step = max((statistics.mean(avgs[-n:]) / statistics.mean(avgs[:-n]) - 1) * 100 for n in (1, 2))
+    last5 = h[-5:]
+    vol5 = sum(r["volume"] for r in last5)
+    vwap5 = (sum(r["average"] * r["volume"] for r in last5) / vol5) if vol5 > 0 else statistics.mean(r["average"] for r in last5)
     return dict(
+        vwap5=vwap5,         # volume-weighted traded price of the last five completed days (Forge-wide)
         ask_days=ask_days,
         med_hi=med_hi,
         ceil3=max(r["highest"] for r in last3),
@@ -189,6 +195,7 @@ def analyse(type_id: int, bk, h, mine=frozenset(), now=None) -> dict:
         top_units=top_units, gap=((nxt / ask - 1) * 100 if nxt else None),
         stale_days=statistics.median(age(o) for o in asks[:5]),
         nm_ask=nm(bid, ask), nm_d=nm(bid, ask_d), nm_sup=nm(bid, sell_ref), sell_ref=sell_ref,
+        nm_real=nm(bid, hs["vwap5"]),            # margin at the price the item actually traded at, not the ask
         fresh_fills=sum(1 for o in young if o["volume_remain"] < o["volume_total"]),
         fresh_units=sum(o["volume_total"] - o["volume_remain"] for o in young),
         near=len(near), **hs,
