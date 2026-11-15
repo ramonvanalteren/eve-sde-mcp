@@ -178,7 +178,7 @@ class A4EParsing(unittest.TestCase):
     def test_tier_urls_match_the_ones_in_workflow_new_candidates(self):
         text = (SKILL / "reference" / "workflow-new-candidates.md").read_text(encoding="utf-8")
         in_doc = set(re.findall(r"`(https://dev\.adam4eve\.eu/margin_finder\.php[^`]+)`", text))
-        for tier in ("t1", "t2", "t3"):
+        for tier in ("t1", "t2", "t3", "t4"):
             self.assertIn(a4e.tier_url(tier, 1), in_doc, f"{tier} URL in a4e.py differs from workflow-new-candidates.md")
         self.assertIn(a4e.hv_url(1), in_doc, "the high-velocity URL in a4e.py differs from workflow-new-candidates.md")
 
@@ -348,26 +348,44 @@ class Gates(unittest.TestCase):
         self.assertEqual(self.check()["mode"], "relaxed")
         self.assertEqual(self.check(safe=True)["mode"], "safe")
 
-    def test_fill_checks_are_soft_flags_for_t2_and_t3_in_the_default_mode(self):
-        for make in (self.t2, self.t3):
+    def test_fill_checks_are_soft_flags_for_t2_t3_and_t4_in_the_default_mode(self):
+        for make in (self.t2, self.t3, self.t4):
             row = self.a4e_row(**self.SLOW)
             e = self.check(a=row, v=make(fresh_fills=0))
-            self.assertEqual(e["tier"] in ("T2", "T3"), True)
+            self.assertEqual(e["tier"] in ("T2", "T3", "T4+"), True)
             self.assertEqual(e["hard"], [], make.__name__)
             self.assertTrue(any(r.startswith("slow fills S2B") for r in e["soft"]), make.__name__)
             self.assertIn("no fresh fills in top bids", e["soft"], make.__name__)
 
     def test_safe_mode_keeps_the_fill_checks_as_gates_in_every_tier(self):
-        for make in (self.live, self.t2, self.t3):
+        for make in (self.live, self.t2, self.t3, self.t4):
             e = self.check(a=self.a4e_row(**self.SLOW), v=make(fresh_fills=0), safe=True)
             self.assertTrue(any(r.startswith("S2B") for r in e["hard"]), make.__name__)
             self.assertIn("no fresh fills in top bids", e["hard"], make.__name__)
 
-    def test_t1_and_t4_keep_the_fill_checks_as_gates_in_the_default_mode(self):
-        for make in (self.live, self.t4):
-            e = self.check(a=self.a4e_row(tr=40.0, s2b_vol=3.0, s2b_trd=2.0), v=make(fresh_fills=0))
-            self.assertTrue(any(r.startswith("S2B") for r in e["hard"]), make.__name__)
-            self.assertIn("no fresh fills in top bids", e["hard"], make.__name__)
+    def test_t1_keeps_the_fill_checks_as_gates_in_the_default_mode(self):
+        e = self.check(a=self.a4e_row(tr=40.0, s2b_vol=3.0, s2b_trd=2.0), v=self.live(fresh_fills=0))
+        self.assertEqual(e["tier"], "T1")
+        self.assertTrue(any(r.startswith("S2B") for r in e["hard"]))
+        self.assertIn("no fresh fills in top bids", e["hard"])
+
+    def test_t4_joined_the_relaxed_fill_tiers_on_2026_11_15(self):
+        self.assertEqual(self.check(a=self.a4e_row(**self.SLOW), v=self.t4())["tier"], "T4+")
+        self.assertIn("T4+", scan_candidates.RELAXED_FILL_TIERS)
+        self.assertNotIn("T1", scan_candidates.RELAXED_FILL_TIERS)
+
+    def test_a_t4_row_with_one_unit_a_day_of_sold_to_buy_is_a_pair_with_soft_flags(self):
+        row = self.a4e_row(tr=10.0, s2b_vol=1.0, s2b_trd=1.0)
+        e = self.check(a=row, v=self.t4())
+        self.assertEqual(e["hard"], [])
+        self.assertEqual(e["units"], 2)                       # one increment even when the cap rounds to zero units
+        self.assertTrue(any(r.startswith("slow fills S2B 1u/1t") for r in e["soft"]))
+        safe = self.check(a=row, v=self.t4(), safe=True)
+        self.assertTrue(any(r.startswith("S2B") for r in safe["hard"]))
+
+    def test_default_mode_caps_t4_at_two_days_of_sold_to_buy_in_pairs(self):
+        row = self.a4e_row(tr=40.0, s2b_vol=3.0, s2b_trd=3.0)
+        self.assertEqual(self.check(a=row, v=self.t4())["units"], 6)            # 2 days x 3 units, in pairs
 
     def test_default_mode_caps_t2_t3_at_two_days_of_sold_to_buy_and_safe_mode_at_one(self):
         row = self.a4e_row(tr=400.0, s2b_vol=40.0)
