@@ -6,11 +6,13 @@ Why raw HTML and not WebFetch: the fill-evidence gate needs columns a summarised
 page drops (Sold2Buy volume and trades, the 7-day buy/sell price deltas). This
 script saves the pages as-is and parses the results table itself.
 
-    python scripts/a4e.py fetch OUTDIR      # saved tier pages T1/T2/T3 (3 pages each) + high-velocity pull
+    python scripts/a4e.py fetch OUTDIR      # saved tier pages T1/T2/T3 (3 pages each), T4+ (7 pages) + high-velocity pull
     python scripts/a4e.py show OUTDIR       # how many rows parsed, first rows
 
-The three tier URLs are the saved filters in reference/workflow-new-candidates.md
-(a test keeps them identical). The high-velocity pull is the supplement added on
+The four tier URLs are the saved filters in reference/workflow-new-candidates.md
+(a test keeps them identical). T4+ (unit bid of 50M and up, no upper bound) was added on
+2026-11-15; its pages are named t4_p*.html and are read by the same loader. The
+high-velocity pull is the supplement added on
 2026-10-09: buy 500K-50M, >=100 trades/day, >=100M ISK/day, and no volatility
 bands, because the bands drop the fast, thin-margin items the 7.5% high-velocity
 floor exists for. If the fee profile ever changes, update `buyFee`/`sellFee`/
@@ -58,6 +60,7 @@ TIERS = {
     "t1": dict(gt="500000%2C0", lt="5.000.000%2C0", tr=30, isk="50.000.000", a="0.5", b="2.5"),
     "t2": dict(gt="5.000.000%2C0", lt="20000000%2C0", tr=20, isk="100.000.000", a="0.3", b="4.0"),
     "t3": dict(gt="20.000.000%2C0", lt="50000000%2C0", tr=10, isk="200.000.000", a="0.2", b="5.0"),
+    "t4": dict(gt="50000000%2C0", lt="", tr=10, isk="200.000.000", a="0.2", b="5.0"),
 }
 _HV = (
     "https://dev.adam4eve.eu/margin_finder.php?category=&group=&mgroup=&hub=1&region=&station="
@@ -65,7 +68,9 @@ _HV = (
     "&supplyGT=&supplyLT=&trackVolGT=&trackVolLT=&trackNumGT=&trackNumLT="
     "&buyFee=0.5&sellFee=1.5&salesTax=3.4&rows=50&cpage={p}"
 )
-PAGES = {"t1": 3, "t2": 3, "t3": 3, "hv": 4}
+# One page past the last is fine: a page beyond the end repeats an earlier page and the loader de-duplicates.
+# T4+ held 765-474=291 rows (6 pages, the last partial) on 2026-11-15, so 7 leaves one spare.
+PAGES = {"t1": 3, "t2": 3, "t3": 3, "t4": 7, "hv": 4}
 
 
 def tier_url(tier: str, page: int = 1) -> str:
