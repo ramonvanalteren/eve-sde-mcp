@@ -10,7 +10,7 @@ scan_candidates.py — Workflow 1 candidate scan with the fill-evidence gates.
 TWO MODES (the run prints which one it used; say so in the report)
   default (relaxed)  Added 2026-11-10 at the user's direction. With idle cash a bid that never fills costs
                      the broker fee (0.5% at placement, about 0.5% per reprice) and nothing else, so the
-                     checks that only ask "will it fill?" stop being gates for T2 and T3 rows. The
+                     checks that only ask "will it fill?" stop being gates for T2, T3 and T4+ rows. The
                      checks that ask "will the price hold after it fills?" stay, and one is added: the
                      margin at the price the item actually traded at. See the changes below.
   --safe             The original gate set, unchanged: every fill check is a hard gate in every tier,
@@ -18,10 +18,12 @@ TWO MODES (the run prints which one it used; say so in the report)
                      and there is no traded-price test.
 
 What the relaxed mode changes (everything not listed here is the same in both modes)
-  S2B minimum and "no fresh fills" for T2/T3 rows: hard gates -> soft flags ("slow fills S2B ...").
-                     T1 and T4+ rows keep both as hard gates.
+  S2B minimum and "no fresh fills" for T2/T3/T4+ rows: hard gates -> soft flags ("slow fills S2B ...").
+                     T1 rows keep both as hard gates. T4+ joined on 2026-11-15 at the user's direction: at
+                     50M a unit and up, 20 units a day is 1B+ ISK of sales into bids, which almost nothing
+                     shows, so the hard gate rejected the whole tier.
   thin / unit size   rows priced at or above the T3 floor (T3, T4+) are sized in pairs, not fives.
-  size cap           T2/T3 rows are capped at two days of Sold2Buy volume (safe mode: one day).
+  size cap           T2/T3/T4+ rows are capped at two days of Sold2Buy volume (safe mode: one day).
   swept bid          rejects only when the ask is also weakening (A4E 7dSell < -5%, or unknown);
                      otherwise a soft flag and the row is sized at half.
   traded-price test  NEW hard gate: the margin at the 5-day volume-weighted traded price must stay
@@ -47,7 +49,7 @@ HARD gates (a row fails if any applies; "safe" marks what only applies in --safe
                qualify (A4E >=100 trades/day, 3-day volume >=100, >=15 orders each side)
   traded price (default mode) margin at the 5-day volume-weighted traded price is under floor - 1
   fill (A4E)   Sold2Buy volume < 20 units/day or Sold2Buy trades < 15/day — sellers are not
-               reaching buy orders at a useful rate (safe mode, and T1/T4+ rows in default mode)
+               reaching buy orders at a useful rate (safe mode, and T1 rows in default mode)
   fill (book)  no young (<24h) partly-filled bid near the top of the live book (same scope)
   swept bid    A4E 7dBuy < -5%: the best bid is far below its own 7-day average, so the top bids were
                just swept and the margin on screen is temporary (the real bid returns). Default mode:
@@ -69,12 +71,12 @@ SOFT flags (shown on the row, judgement left to the caller)
   ask 20-25% over its 7-day level; bids rising >15% over their 7-day level; 8-day average price
   range over 25%; the average price jumped 8%+ in the last one or two days; one earlier buy
   cancelled under half filled; the row only clears through the high-velocity relaxation.
-  Default mode adds: "slow fills S2B ..." and "no fresh fills in top bids" (T2/T3, were gates),
+  Default mode adds: "slow fills S2B ..." and "no fresh fills in top bids" (T2/T3/T4+, were gates),
   "bid swept ... half size", and "traded-price margin" when it sits within the 1-point slack.
 
 Units are the middle of the sizing band of A4E trades/day in multiples of the unit increment,
 capped at the Sold2Buy volume per day (an order larger than one day of sellers sits for days; two
-days for T2/T3 in default mode). A row that clears with a swept bid is sized at half.
+days for T2/T3/T4+ in default mode). A row that clears with a swept bid is sized at half.
 
 The repeat-open check is what limits the fee loss on bids that never fill: two earlier opens
 that were cancelled under half filled end the item, so the loss per item stays near two placement
@@ -110,7 +112,7 @@ HV_MIN_TRADES, HV_MIN_VOL, HV_MIN_ORDERS = 100, 100, 15
 # buys since 2026-10-10 (a small sample chosen under the gates) the Sold2Buy gate did not separate good
 # fillers from bad ones (reference/workflow-new-candidates.md, "Modes"). Change these here and in that
 # document together.
-RELAXED_FILL_TIERS = ("T2", "T3")    # tiers where the will-it-fill checks are soft flags, not gates
+RELAXED_FILL_TIERS = ("T2", "T3", "T4+")   # tiers where the will-it-fill checks are soft flags, not gates (T4+ added 2026-11-15)
 EXPENSIVE_TIERS = ("T3", "T4+")      # unit price at or above the T3 floor
 EXPENSIVE_UNIT_INCREMENT = 2         # these rows are sized in pairs; a five-unit T3 slot is 100-250M
 RELAXED_S2B_DAYS = 2                 # size cap for relaxed rows, in days of A4E Sold2Buy volume (safe: 1)
@@ -267,7 +269,7 @@ def mode_line(safe: bool) -> str:
     """First-lines status for the run, like the repeat-open line: the report must say which mode ran."""
     if safe:
         return "mode: SAFE (original gates: every fill check is a hard gate, swept bids always reject, one-day size cap, no traded-price test)"
-    return (f"mode: DEFAULT/relaxed (T2/T3: S2B and fresh-fill checks are soft flags, size cap {RELAXED_S2B_DAYS} days of S2B; "
+    return (f"mode: DEFAULT/relaxed (T2/T3/T4+: S2B and fresh-fill checks are soft flags, size cap {RELAXED_S2B_DAYS} days of S2B; "
             f"swept bid rejects only with a weakening ask, else half size; rows >= T3 floor sized in pairs; "
             f"traded-price margin test on; --safe restores the original gates)")
 
