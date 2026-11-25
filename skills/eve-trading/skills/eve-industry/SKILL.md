@@ -54,6 +54,7 @@ References are one level deep: read exactly what the table says for the current 
 4. **Installation cost is part of the margin.** price_build estimates it by default from live cost indices when you don't pass the in-client number (`installationSource`/`installationEstimate` in the report show which); the estimate doesn't account for structure rig bonuses, so pass the real number when you have it, especially near a margin threshold.
 5. **Sunk materials never justify a marginal line.** "I already own the Tritanium" is not a margin argument — the decision basis is replacement cost (what the minerals would sell/be worth today), not what was paid. Let committed runs finish (materials are sunk), sell the output at any positive net, but don't relist the line without a fresh verification clearing the threshold.
 6. **Slot economics accompany every verdict.** A line's value is profit per job-duration, not per run — the founding audit's dead line was 53k per 2.5 days while another line made 1.75M per day in the same facility. Report both the margin and the profit-per-slot-time when recommending keep/kill/scale.
+7. **Check the job's skills, not the blueprint item's.** Before recommending a blueprint or a new line, compare `get_blueprint`'s `skills[]` for every activity the plan needs (manufacturing, copying, invention) with `get_character_skills`, and list each missing skill with its training time. `check_skill_requirements` checks the skills of the item it is given, so on a blueprint it can report everything met while the job cannot be started.
 
 ## Notes
 

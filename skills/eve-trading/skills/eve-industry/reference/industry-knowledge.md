@@ -27,7 +27,7 @@ The reference layer the workflows draw on. Honest scope marker throughout: the M
 - T2 blueprints are invented copies, not built: datacores (two sciences per blueprint — see get_blueprint activity 8) + an encryptor-type skill + the T1 item, with a skill-dependent success probability. Output is a limited-run T2 BPC.
 - get_blueprint shows invention materials and skills per blueprint; T2 build margins then verify with price_build on the invented BPC's ME/runs (pass the BPC's actual runs and ME).
 - Datacore cost is the dominant invention input and is priced like any material — the same margin discipline applies to the whole chain (invent cost ÷ success probability = expected BPC cost, amortized into the T2 line's economics).
-- The same skills chain also gates T2 module production — check skill requirements with the tools before committing to an invention line.
+- The same skills chain also gates T2 module production — check the activity's skills (hub rule 7) before committing to an invention line.
 
 ## Reactions (note)
 
@@ -38,7 +38,7 @@ Reactions (moon mining chain, boosters) are the same discipline — materials in
 - **Industry** (job speed), **Advanced Mass Production** (+1 concurrent job per level) — slots are the scarce resource; more slots compound every healthy line.
 - **Science** family for research; the encryption + science pairs for invention.
 - **Metallurgy/Research** for ME/TE research speed.
-- Verify character gaps with the skill-check tooling before planning a line that depends on them.
+- Verify character gaps from `get_blueprint`'s activity skills (hub rule 7) before planning a line that depends on them.
 
 ## The ledger and production (BOM linkage — shipped)
 

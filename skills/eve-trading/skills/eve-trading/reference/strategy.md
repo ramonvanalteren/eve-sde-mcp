@@ -56,7 +56,7 @@ The block between the markers is machine-read: `size_positions.py` loads its def
 | `fewer_orders_variant_profit_share` | The fewer-orders variant keeps the shortest ranked prefix holding this share of the profit. Two thirds because on the 4 Oct plan the top 9 of 16 rows held 68% of the profit for 53% of the capital. | Skill default | `size_positions.py` |
 | `tiers_isk_per_unit` | Tier boundaries by unit price (the price paid per unit at Perimeter), matching the four saved A4E URLs. Below the T1 floor is "micro"; "T4+" starts at the T3 ceiling (its own saved URL since 2026-11-15). | Earlier | `size_positions.py` |
 
-Margin floors (entry by tier, flat hold floor) are not here — they live in [margin-verification.md](margin-verification.md). The buffer is not a parameter: it is the figure the user most recently stated, in ISK, for the request at hand (250M on 2026-10-02, 400M on 2026-10-04); if none was stated, ask.
+Margin floors (entry by tier, flat hold floor) are not here — they live in [margin-verification.md](margin-verification.md). The buffer is not a parameter: it is the user's standing figure in ISK, kept in a private note and confirmed monthly, unless they state another for the request at hand ([capital-allocation.md](capital-allocation.md), combined allocation, step 5).
 
 "Soft" means flag it and name the rows — never silently block, drop or resize. The profit-per-slot floor is the only limit left: there is no order cap and no tier flag.
 

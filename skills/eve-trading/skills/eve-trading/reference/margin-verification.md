@@ -18,7 +18,10 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 As of **2026-09-12**, this strategy trades out of two locations, not one:
 
 - **Perimeter - 0.0% Neutral States Market HQ** — `location_id 1044752365771`, system 30000144 (Perimeter, 1 jump from Jita). **Buy-side.** New buy orders go here with `range: "1"`, so they still reach sellers at Jita 4-4.
-  - Broker fee: **flat 100 ISK structure fee + 0.5% SCC surcharge**, additive — placing or relisting costs `0.5% × order value + 100 ISK`.
+  - Broker fee: **flat 100 ISK structure fee + SCC surcharge**, additive.
+    - Placing an order costs `0.5% × order value + 100 ISK`.
+    - Changing an open order's price costs `0.1% × new price × units still open`, plus `0.5% of any escrow the change adds`, plus 100 ISK. (Checked against the wallet journal on 2026-11-11 and 2026-11-26.)
+    - The surcharge is booked as `market_provider_tax`, not `brokers_fee`.
   - The flat 100 ISK is 0.02% or less at tier ticket sizes (≥500K ISK), so the margin formula below and the A4E URLs model the buy side as 0.5% alone. The ledger's fee/order matching needs the full additive model — see `get_station_fees`.
 - **Jita 4-4 Caldari Navy Assembly Plant** — `location_id 60003760`, system 30000142 (Jita). **Sell-side, unchanged.** Sell orders stay here — this is where buyer foot-traffic actually is. Broker fee: **1.5%**. Sales tax: **3.4%** (charged on sell fill; sales tax is a sell-side-only cost, so it's unaffected by where the item was bought).
 
