@@ -2,7 +2,19 @@
 
 A plain "portfolio review" request runs Workflows 2–5 together in this order by default. Equal rigor throughout — Workflow 3 in particular has been a repeated source of real errors when treated as an afterthought. Verify every margin figure with the [two-call procedure in margin-verification.md](margin-verification.md).
 
-The live-margin tables are scripted — `scripts/review_portfolio.py buys|sells|extend` (inputs: the saved `get_character_orders`, `get_wallet_transactions` and `get_character_assets` results; formats in `scripts/portfolio.py`; pass `--assets` to `sells` and `extend` so unlisted stock is counted). Its `hint` column (KILL? / EDGE / ok) is a prompt for the spot-checks below, never the verdict.
+**Start with the review command**, which builds every table of the skeleton below:
+
+```bash
+python scripts/review_portfolio.py report --orders orders.json --wallet <ISK> --assets assets.json \
+    --a4e-dir a4e/ --ignore <production type ids> --save snapshot.json --since <previous snapshot.json>
+```
+
+Run `sync_wallet_ledger` first: transactions and true order ages come from the ledger, while prices come from the saved `get_character_orders` result. Build on its output instead of recomputing it. What stays with you:
+- confirm each row of the Kill table (spot checks and exceptions in Workflow 2, step 4) and add judgement Kills (volume dried up, an adverse move);
+- choose Increases from the runway table, with units and ISK, or say there are none;
+- write the notes and the verdicts that need one, and pick the 2-3 pipeline outliers from the Workflow 5 inputs.
+
+The single tables are also available — `scripts/review_portfolio.py buys|sells|extend` (inputs: the saved `get_character_orders`, `get_wallet_transactions` and `get_character_assets` results; formats in `scripts/portfolio.py`; pass `--assets` to `sells` and `extend` so unlisted stock is counted). Its `hint` column (KILL? / EDGE / ok) is a prompt for the spot-checks below, never the verdict.
 
 ## Contents
 - [Report skeleton and pre-send checklist](#report-skeleton-and-pre-send-checklist)

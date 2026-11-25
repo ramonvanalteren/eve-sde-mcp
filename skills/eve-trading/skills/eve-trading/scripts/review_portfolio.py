@@ -5,6 +5,10 @@ review_portfolio.py — live-margin tables for Workflows 2 and 3, and extension 
     python scripts/review_portfolio.py buys   --orders orders.json --tx tx.json
     python scripts/review_portfolio.py sells  --orders orders.json --tx tx.json [--assets assets.json]
     python scripts/review_portfolio.py extend --orders orders.json --tx tx.json [--assets assets.json] [--a4e-dir a4e/]
+    python scripts/review_portfolio.py report --orders orders.json --wallet ISK --assets assets.json [--a4e-dir a4e/]
+
+report The whole review (Workflows 2-5) as one markdown draft in the agreed skeleton: see
+       review_report.py. Takes transactions and order ages from the ledger.
 
 Common options: --hv-floor 7.5 (default; --no-hv disables), --a4e-dir DIR (adds A4E trades/day to the
 high-velocity test and the Sold2Buy evidence). `extend` leaves out the user's standing exclusions
@@ -51,10 +55,11 @@ from pathlib import Path
 import a4e
 import market
 import portfolio
+import review_report
 import scan_candidates
 import size_positions
 
-HOLD_FLOOR = 10.0
+HOLD_FLOOR = review_report.HOLD_FLOOR
 EDGE_POINTS = 1.0
 
 
@@ -255,9 +260,13 @@ def cmd_extend(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    return review_report.run(args, names_for)
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Live-margin portfolio tables (Workflows 2-3) and extension candidates")
-    ap.add_argument("command", choices=["buys", "sells", "extend"])
+    ap = argparse.ArgumentParser(description="Live-margin portfolio tables, extension candidates and the full review draft")
+    ap.add_argument("command", choices=["buys", "sells", "extend", "report"])
     ap.add_argument("--orders", required=True)
     ap.add_argument("--tx", nargs="*", default=[], help="one or more get_wallet_transactions result files")
     ap.add_argument("--assets", help="get_character_assets result (the feed omits units that are in sell orders)")
@@ -267,8 +276,12 @@ def main(argv=None) -> int:
     ap.add_argument("--ignore", default="", help="type ids to leave out of `extend` (production stock, hold containers)")
     ap.add_argument("--hv-floor", type=float, default=7.5)
     ap.add_argument("--no-hv", action="store_true")
+    ap.add_argument("--wallet", type=float, help="report: wallet balance in ISK")
+    ap.add_argument("--ledger", help="report: ledger.db for transactions and order ages (default ~/.eve-sde/ledger.db)")
+    ap.add_argument("--save", help="report: write this run's snapshot to compare with next time")
+    ap.add_argument("--since", help="report: an earlier --save snapshot, for the changes since then")
     args = ap.parse_args(argv)
-    return {"buys": cmd_buys, "sells": cmd_sells, "extend": cmd_extend}[args.command](args)
+    return {"buys": cmd_buys, "sells": cmd_sells, "extend": cmd_extend, "report": cmd_report}[args.command](args)
 
 
 if __name__ == "__main__":
