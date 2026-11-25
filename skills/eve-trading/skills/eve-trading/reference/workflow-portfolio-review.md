@@ -51,7 +51,7 @@ Workflow 5 — Pipeline            the 2-3 clearest outliers with the capital-ef
 Pre-send checklist:
 - [ ] Every margin is the two-call figure at the competitive bid — never the tool's own `margin` field
 - [ ] Every Kill rests on the live margin at the competitive bid and the character's own recent sells — never on a margin rebuilt from ESI history
-- [ ] `isBuyOrder` and `escrow` confirmed before any buy-side verdict; sell-only items went to Workflow 3
+- [ ] `isBuyOrder` and `escrow` confirmed before any buy-side verdict; every item held for sale is in Workflow 3
 - [ ] Buy orders grouped by their own `locationId`
 - [ ] Every zero-fill Kill checked for order age against fill history (not `issued`) and for jump-range competition
 - [ ] Every Increase passed the runway check
@@ -66,7 +66,7 @@ Pre-send checklist:
 ## Workflow 2 — Buy portfolio review (kill / increase / hold)
 
 1. Pull open orders via `get_character_orders`.
-2. **Split the type_ids by `isBuyOrder` before anything else.** Items with a genuine open buy order go through this workflow; sell-only items go to Workflow 3.
+2. **Split the type_ids by `isBuyOrder` before anything else.** Items with a genuine open buy order go through this workflow. Workflow 3 covers every item held for sale, with or without a buy order, so a sell-only item appears only there.
    - `get_portfolio_margins` returns a margin for *any* type_id, buy order or not — running it on a sell-only item and reporting a buy-side verdict is a category error.
    - The check applies every time a margin is about to be discussed for a specific item, including one-off questions ("did the reprice fix X", "how's item Y doing").
    - Confirm `isBuyOrder: true` and an `escrow` field before citing `get_portfolio_margins` as a position check; if neither is present, go to Workflow 3. (Why: [failure-cases.md](failure-cases.md#sell-only-items-reported-as-buy-side-verdicts-twice).)
@@ -120,7 +120,7 @@ Pre-send checklist:
 
 This workflow gets the same rigor as Workflow 2 — treating it as an afterthought has caused repeated real mistakes. Sell orders are unaffected by the Perimeter move (they stay at Jita 4-4, same fees). The buy location only changes the broker fee paid to acquire a lot, and that is a separate wallet-journal entry, not part of the per-unit price `get_wallet_transactions` returns — so the cost-basis method below is unaffected by where a lot was bought.
 
-1. Take the sell-only type_ids identified in Workflow 2, step 2 (no `isBuyOrder`/`escrow` field on any of that item's open orders).
+1. Take every type_id held for sale: each with an open sell order, plus the unlisted stock Workflow 4 finds, including types that also have an open buy order.
 2. **Determine held units first, from both sources — not just the sell order.** (`review_portfolio.py sells --assets …` does this: the assets feed omits units that are in sell orders, so what it shows at Jita 4-4 is the unlisted stock and is added to the listed units, never netted against them; it also separates stock at Jita 4-4 from stock elsewhere; stock sitting at another station or in a container cannot be listed at Jita 4-4 until it is moved — name where it is.) Sum the `volumeRemain` across all open sell orders for the item, *plus* any uncovered units Workflow 4 found sitting in the hangar with no sell order at all. Confirmed failure case: Federation Navy 200mm Steel Plates was reported with held=1 (the sell order only) when Workflow 4 had already found 2 more unlisted units — the per-unit margin was still right, but the total exposure/profit figure was understated by 3x. See [failure-cases.md](failure-cases.md).
 3. **Do not use `get_portfolio_margins` as the verdict for these.** Pull `get_wallet_transactions(side="buy", type_id=X)` and compute cost basis as the **bounded weighted average**, not a full-history blend:
    - sort buy transactions newest-first and sum quantities from the top until they cover the held-units figure from step 2; use only those lots and discard older ones entirely;

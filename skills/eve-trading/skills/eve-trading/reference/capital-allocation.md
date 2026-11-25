@@ -67,7 +67,7 @@ Pre-send checklist:
 - [ ] Cut list split into Kills / consolidation / watch list, never merged
 - [ ] Freed escrow counted in the pool; buffer = the figure the user stated
 - [ ] Fresh A4E data for all four tiers and the high-velocity supplement; two-call margins and the fill-evidence gates on every row; depth checklist on every row recommended
-- [ ] Excluded items named with their source (exclusions file or this request); rows that rely on the high-velocity relaxation labelled
+- [ ] Excluded items named with their source (exclusions file or this request); high-velocity rows labelled "HV floor"
 - [ ] Sizing and ranking done by `scripts/size_positions.py`, not by hand
 - [ ] Leftover cash reported if the volume caps ran out first
 - [ ] Order count and tier mix reported before and after
