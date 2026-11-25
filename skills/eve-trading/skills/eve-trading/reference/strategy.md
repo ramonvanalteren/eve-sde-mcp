@@ -20,13 +20,14 @@ The standing strategy this skill runs for hybrid station trading. It was set by 
 
 ## Parameters
 
-The block between the markers is machine-read: `size_positions.py` loads its defaults from it, and the tests in `skills/eve-trading/tests/` check that nothing else in the skill repeats these values. Change a value here and nowhere else. Tier boundaries are in ISK per unit; a `null` limit means "none". (The unit increment is also worded into SKILL.md's sizing rule — "multiples of 5" — so keep those two in step; the tests don't cover it.)
+The block between the markers is machine-read: `size_positions.py` loads its defaults from it, and the tests in `skills/eve-trading/tests/` check that nothing else in the skill repeats these values. Change a value here and nowhere else. Tier boundaries are in ISK per unit; a `null` limit means "none". (The unit increments are also worded into SKILL.md's sizing rule — "multiples of 5" and "pairs" — so keep those in step; the tests don't cover it.)
 
 <!-- strategy-params:begin -->
 ```json
 {
   "sizing_band_pct_of_daily_trades": [25, 50],
   "unit_increment": 5,
+  "expensive_unit_increment": 2,
   "rank_by": "yield",
   "min_profit_per_slot_isk": 10000000,
   "comfortable_order_range": [40, 60],
@@ -46,6 +47,7 @@ The block between the markers is machine-read: `size_positions.py` loads its def
 |---|---|---|---|
 | `sizing_band_pct_of_daily_trades` | Units as a share of the item's average daily trade count. Above the ceiling a row is flagged OVER-BAND; if the minimum increment alone exceeds the ceiling the item is excluded as thin. | 2026-10-02 (raised from a lower band) | `size_positions.py` |
 | `unit_increment` | Positions are sized in multiples of this many units. | Earlier | `size_positions.py` |
+| `expensive_unit_increment` | Rows priced at or above the T3 floor are sized in multiples of this many units instead. The sizer also keeps a multiple of `unit_increment`. | Scan: 2026-11-10. Sizer: 2026-11-26 | `size_positions.py`, `scan_candidates.py` (default mode) |
 | `rank_by` | `yield` = M/1M/day, descending. Margin is only a floor test. | 2026-10-02 | `size_positions.py` |
 | `min_profit_per_slot_isk` | Soft floor on total profit per full cycle at the live margin; rows below are flagged SMALL-SLOT, never dropped. | 2026-10-04 | `size_positions.py` |
 | `comfortable_order_range` | The open-buy count the user is comfortable with. There is no cap: the count is reported, and the script adds a note only above the top of the range. | 2026-10-04 (supersedes the 2 Oct request to cut the count) | reported only |

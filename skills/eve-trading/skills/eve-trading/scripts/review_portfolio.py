@@ -6,8 +6,9 @@ review_portfolio.py — live-margin tables for Workflows 2 and 3, and extension 
     python scripts/review_portfolio.py sells  --orders orders.json --tx tx.json [--assets assets.json]
     python scripts/review_portfolio.py extend --orders orders.json --tx tx.json [--assets assets.json] [--a4e-dir a4e/]
 
-Common options: --killed IDS (never extended), --hv-floor 7.5 (default; --no-hv disables),
---a4e-dir DIR (adds A4E trades/day to the high-velocity test and the Sold2Buy evidence).
+Common options: --hv-floor 7.5 (default; --no-hv disables), --a4e-dir DIR (adds A4E trades/day to the
+high-velocity test and the Sold2Buy evidence). `extend` leaves out the user's standing exclusions
+(portfolio.load_exclusions) and, for one run, --exclude IDS.
 Inputs are the saved eve-sde tool results described in portfolio.py. Nothing is placed or
 cancelled; every verdict is the caller's judgement — the `hint` column is only a prompt.
 
@@ -74,9 +75,8 @@ def sum_qty(tx, type_id, is_buy, since=None):
 def context(args):
     orders = portfolio.load_orders(args.orders)
     tx = portfolio.load_tx(*args.tx) if args.tx else []
-    killed = portfolio.parse_id_list(args.killed)
     a4e_rows = a4e.load_dir(args.a4e_dir, a4e.sde_resolver()) if args.a4e_dir else {}
-    return orders, tx, killed, a4e_rows, (None if args.no_hv else args.hv_floor)
+    return orders, tx, a4e_rows, (None if args.no_hv else args.hv_floor)
 
 
 def names_for(type_ids):
@@ -90,7 +90,7 @@ def names_for(type_ids):
 
 
 def cmd_buys(args) -> int:
-    orders, tx, killed, rows, hv_floor = context(args)
+    orders, tx, rows, hv_floor = context(args)
     params = size_positions.load_params()
     buys = orders["buys"]
     types = sorted({b["type_id"] for b in buys})
@@ -126,7 +126,7 @@ def cmd_buys(args) -> int:
         out.append(dict(
             name=name, t=t, tier=tier, price=price, rem=b["remain"], tot=b["total"], esc=esc, ask=ask, comp=comp,
             nm_comp=nm_comp, nm_dur=market.nm(live_bid, ask_d), nm_own=nm_own, sup=market.nm(live_bid, hs["med_hi"] if hs["ask_days"] < 2 else ask),
-            floor=floor, hv=hv, hint="KILL?" if killed and t in killed else verdict_hint(nm_comp, nm_own, floor),
+            floor=floor, hv=hv, hint=verdict_hint(nm_comp, nm_own, floor),
             filled=b["total"] - b["remain"], b24=sum_qty(tx, t, True, day(1)), b72=sum_qty(tx, t, True, day(3)),
             b10=sum_qty(tx, t, True), s10=sum_qty(tx, t, False), ahead=sum(o["volume_remain"] for o in bids if o["price"] > price),
             real=real, vol3=hs["vol3"], trend=hs["trend"], nb=nb, ns=ns,
@@ -152,7 +152,7 @@ def cmd_buys(args) -> int:
 
 
 def cmd_sells(args) -> int:
-    orders, tx, killed, rows, hv_floor = context(args)
+    orders, tx, rows, hv_floor = context(args)
     sells, buys = orders["sells"], orders["buys"]
     elsewhere, unl = {}, {}
     if args.assets:
@@ -207,15 +207,23 @@ def cmd_sells(args) -> int:
 
 
 def cmd_extend(args) -> int:
-    orders, tx, killed, rows, hv_floor = context(args)
+    orders, tx, rows, hv_floor = context(args)
+    try:
+        standing, standing_prefixes, exclusions_status = portfolio.load_exclusions(args.exclusions)
+    except ValueError as exc:
+        print(f"Input error: {exc}", file=sys.stderr)
+        return 2
+    print(exclusions_status)
     buys, sells = orders["buys"], orders["sells"]
     unlisted = portfolio.unlisted_stock(portfolio.load_assets(args.assets))[0] if args.assets else {}
     stock, buy_rem = collections.Counter(portfolio.held_stock(sells, unlisted)), collections.Counter()
     for b in buys:
         buy_rem[b["type_id"]] += b["remain"]
     ignore = portfolio.parse_id_list(args.ignore)
-    types = sorted((set(stock) | set(buy_rem)) - killed - ignore)
+    types = sorted((set(stock) | set(buy_rem)) - standing - portfolio.parse_id_list(args.exclude) - ignore)
     names = names_for(types)
+    if standing_prefixes:
+        types = [t for t in types if not str(names.get(t) or "").startswith(standing_prefixes)]
     mine = {b["order_id"] for b in buys}
     data = market.fetch_many(types)
     last = tx[0]["dt"] if tx else market.now_utc()
@@ -254,7 +262,8 @@ def main(argv=None) -> int:
     ap.add_argument("--tx", nargs="*", default=[], help="one or more get_wallet_transactions result files")
     ap.add_argument("--assets", help="get_character_assets result (the feed omits units that are in sell orders)")
     ap.add_argument("--a4e-dir")
-    ap.add_argument("--killed", default="")
+    ap.add_argument("--exclude", default="", help="type ids to leave out of `extend` for this run only (user's request)")
+    ap.add_argument("--exclusions", help=f"the user's standing exclusions (default {portfolio.EXCLUSIONS_DEFAULT})")
     ap.add_argument("--ignore", default="", help="type ids to leave out of `extend` (production stock, hold containers)")
     ap.add_argument("--hv-floor", type=float, default=7.5)
     ap.add_argument("--no-hv", action="store_true")

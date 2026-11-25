@@ -125,6 +125,28 @@ class SizingRules(unittest.TestCase):
         result, _ = run(candidates=[row("Tiny", units=1)], wallet=1e9)
         self.assertEqual(result["rows"][0]["units"], 5)  # never below one increment
 
+    def test_rows_from_the_t3_floor_up_are_sized_in_pairs(self):
+        floor = sp.PARAMS["tiers_isk_per_unit"]["T3"][0]
+        for given, sized in ((4, 4), (7, 8), (1, 2), (5, 5), (10, 10)):      # a multiple of five is kept
+            result, out = run(candidates=[row("Big", price=floor, units=given, trades=40)], wallet=1e10)
+            self.assertEqual(result["rows"][0]["units"], sized, given)
+        self.assertIn("increment 5 (2 from the T3 floor)", out)
+        cheap, _ = run(candidates=[row("Cheap", price=floor - 1, units=4, trades=40)], wallet=1e10)
+        self.assertEqual(cheap["rows"][0]["units"], 5)
+
+    def test_a_pair_decides_whether_an_expensive_row_is_thin(self):
+        price = sp.PARAMS["tiers_isk_per_unit"]["T3"][0]
+        ok, _ = run(candidates=[row("Pair", price=price, units=2, trades=4)], wallet=1e10)
+        self.assertEqual([r["name"] for r in ok["rows"]], ["Pair"])
+        thin, _ = run(candidates=[row("Thin", price=price, units=2, trades=3)], wallet=1e10)
+        self.assertIn("minimum 2 units", thin["excluded_reasons"]["Thin"])
+
+    def test_an_explicit_increment_applies_to_every_row(self):
+        price = sp.PARAMS["tiers_isk_per_unit"]["T3"][0]
+        result, out = run(candidates=[row("Big", price=price, units=4, trades=40)], wallet=1e10, unit_increment=5)
+        self.assertEqual(result["rows"][0]["units"], 5)
+        self.assertNotIn("from the T3 floor", out)
+
     def test_buffer_walk_follows_rank_order_and_reports_why(self):
         cands = [row("First", price=10_000_000, units=10, trades=100, margin=30.0),
                  row("Second", price=10_000_000, units=10, trades=50, margin=30.0)]

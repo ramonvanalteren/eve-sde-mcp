@@ -70,14 +70,17 @@ cycle, so the profit-per-slot floor (`min_profit_per_slot`) flags rows whose
 total profit per full cycle is below it — flagged, never dropped.
 
 **Units are rounded to the nearest multiple of the unit increment (minimum
-one increment; 5 at the time of writing)** before costing. Total profit is computed from the rounded unit count and ranking
-happens after rounding. The script never silently shrinks a unit count to fit
-a budget.
+one increment)** before costing. Rows priced at or above the T3 floor use the
+smaller `expensive_unit_increment` (pairs): their units are kept if they are a
+multiple of either increment, and otherwise rounded to the expensive one. An
+explicit `unit_increment` option applies to every row. Total profit is computed
+from the rounded unit count and ranking happens after rounding. The script never
+silently shrinks a unit count to fit a budget.
 
 **Sizing band.** Each row shows its units as a share of the item's daily
 trade count. Rows above the band ceiling (`trade_share_band[1]`) are flagged
-OVER-BAND. A row whose *minimum* size (one increment) already exceeds the
-band ceiling is a thin item and is excluded outright (reported in
+OVER-BAND. A row whose *minimum* size (one increment for its tier) already
+exceeds the band ceiling is a thin item and is excluded outright (reported in
 `excluded_reasons`) — that is the thin-T3 exclusion. Trades/day <= 0 means
 "unknown" and skips the share check.
 
@@ -118,6 +121,7 @@ _PARAMS_BLOCK = re.compile(
 _REQUIRED_PARAMS = {
     "sizing_band_pct_of_daily_trades",
     "unit_increment",
+    "expensive_unit_increment",
     "rank_by",
     "min_profit_per_slot_isk",
     "comfortable_order_range",
@@ -182,6 +186,20 @@ def _round_to_increment(units: int, increment: int = 5) -> int:
         return increment
     rounded = round(units / increment) * increment
     return max(rounded, increment)
+
+
+def _size_units(units: int, increment: int, expensive: int | None) -> tuple[int, int]:
+    """(sized units, smallest increment) for one row.
+
+    `expensive` is the pair increment for rows at or above the T3 floor, or None. Such a row
+    keeps units that are already a multiple of either increment, so a five-unit hand plan is
+    not turned into four.
+    """
+    if expensive is None:
+        return _round_to_increment(units, increment), increment
+    if units > 0 and units % increment == 0:
+        return units, expensive
+    return _round_to_increment(units, expensive), expensive
 
 
 def _mix(escrow_by_tier: dict) -> dict:
@@ -326,6 +344,7 @@ def size_positions(
     current_tier_escrow: dict | None = None,
     t3_share_flag_pct=_UNSET,
     variant_profit_share=_UNSET,
+    expensive_unit_increment=_UNSET,
 ) -> dict:
     """
     Print the required sizing table plus the slot-discipline summary and
@@ -336,6 +355,9 @@ def size_positions(
     candidates: (name, unit_price, units, margin_pct, trades_per_day,
         profit_per_unit, note) tuples; `units` is rounded to the nearest
         multiple of `unit_increment` (min `unit_increment`) before costing.
+    expensive_unit_increment: the smaller increment for rows priced at or above
+        the T3 floor. Passing `unit_increment` without it applies that one
+        increment to every row.
     wallet: cash available now (ISK).
     freed: escrow returned by the Kills being assumed (ISK); pool = wallet + freed.
     buffer_target_pct / buffer_target_isk: buffer to preserve; the absolute
@@ -364,7 +386,10 @@ def size_positions(
     excluded_reasons (name -> reason), small_slot (names), over_band (names),
     order_count_after, tier_mix_after, variant.
     """
+    if expensive_unit_increment is _UNSET:
+        expensive_unit_increment = PARAMS["expensive_unit_increment"] if unit_increment is _UNSET else None
     unit_increment = PARAMS["unit_increment"] if unit_increment is _UNSET else unit_increment
+    t3_floor = PARAMS["tiers_isk_per_unit"]["T3"][0]
     rank_by = PARAMS["rank_by"] if rank_by is _UNSET else rank_by
     trade_share_band = tuple(PARAMS["sizing_band_pct_of_daily_trades"]) if trade_share_band is _UNSET else trade_share_band
     min_profit_per_slot = PARAMS["min_profit_per_slot_isk"] if min_profit_per_slot is _UNSET else min_profit_per_slot
@@ -398,11 +423,13 @@ def size_positions(
     # actually being sized, not the raw input.
     prepared = []
     for name, unit_price, raw_units, margin_pct, trades_per_day, profit_per_unit, note in candidates:
-        units = _round_to_increment(raw_units, unit_increment)
+        pair = expensive_unit_increment if unit_price >= t3_floor else None
+        units, min_units = _size_units(raw_units, unit_increment, pair)
         total_profit = profit_per_unit * units
         yield_m_per_1m_day = (profit_per_unit / unit_price) * trades_per_day if unit_price else 0.0
         prepared.append(
-            (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note)
+            (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note,
+             min_units)
         )
 
     if rank_by == "yield":
@@ -413,7 +440,9 @@ def size_positions(
     floor_txt = f"{min_profit_per_slot / 1e6:g}M" if min_profit_per_slot is not None else "off"
     print(
         f"Parameters (reference/strategy.md): band {band_low:g}-{band_high:g}% of daily trades | "
-        f"increment {unit_increment} | rank by {rank_by} | profit-per-slot floor {floor_txt} | "
+        f"increment {unit_increment}"
+        + (f" ({expensive_unit_increment} from the T3 floor)" if expensive_unit_increment is not None else "")
+        + f" | rank by {rank_by} | profit-per-slot floor {floor_txt} | "
         f"comfortable orders {order_range[0]}-{order_range[1]}"
         + (f" | order cap {max_open_orders}" if max_open_orders is not None else "")
     )
@@ -429,15 +458,16 @@ def size_positions(
     small_slot = []
     over_band = []
 
-    for name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note in prepared:
+    for (name, unit_price, units, margin_pct, trades_per_day, profit_per_unit, total_profit, yield_m_per_1m_day, note,
+         min_units) in prepared:
         cost = unit_price * units
 
         # Thin-item exclusion: even the minimum size would be too big a share of the day.
         # (compared at whole-percent precision: 80 units on 159 trades/day is 50%, not over it)
-        if trades_per_day > 0 and round(unit_increment / trades_per_day * 100) > band_high:
+        if trades_per_day > 0 and round(min_units / trades_per_day * 100) > band_high:
             excluded.append(name)
             excluded_reasons[name] = (
-                f"thin: minimum {unit_increment} units = {unit_increment / trades_per_day * 100:.0f}% of "
+                f"thin: minimum {min_units} units = {min_units / trades_per_day * 100:.0f}% of "
                 f"{trades_per_day:.1f} trades/day (band ceiling {band_high:.0f}%)"
             )
             continue
@@ -564,6 +594,7 @@ def size_positions(
     return {
         "parameters": {
             "unit_increment": unit_increment,
+            "expensive_unit_increment": expensive_unit_increment,
             "rank_by": rank_by,
             "trade_share_band": tuple(trade_share_band),
             "min_profit_per_slot": min_profit_per_slot,
@@ -606,8 +637,8 @@ EXAMPLE_PLAN = {
          "margin_pct": 24.2, "trades_per_day": 39, "profit_per_unit": 2_004_000, "note": "thin top asks"},
         {"name": "Signal Amplifier II", "unit_price": 614_400, "units": 80,
          "margin_pct": 17.1, "trades_per_day": 159, "profit_per_unit": 105_600, "note": "cheap, fast: small slot"},
-        {"name": "Thin T3 example", "unit_price": 31_000_000, "units": 5,
-         "margin_pct": 14.0, "trades_per_day": 8, "profit_per_unit": 4_300_000, "note": "thin: gets excluded"},
+        {"name": "Thin T3 example", "unit_price": 31_000_000, "units": 2,
+         "margin_pct": 14.0, "trades_per_day": 3, "profit_per_unit": 4_300_000, "note": "thin: gets excluded"},
     ],
 }
 
@@ -616,7 +647,7 @@ _PLAN_KEYS = {
     "current_tier_escrow", "candidates", "options",
 }
 _OPTION_KEYS = {
-    "buffer_target_pct", "stop_at_buffer", "unit_increment", "rank_by", "trade_share_band",
+    "buffer_target_pct", "stop_at_buffer", "unit_increment", "expensive_unit_increment", "rank_by", "trade_share_band",
     "min_profit_per_slot", "max_open_orders", "order_range", "t3_share_flag_pct", "variant_profit_share",
 }
 

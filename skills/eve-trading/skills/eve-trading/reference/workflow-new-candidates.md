@@ -7,7 +7,7 @@ The mechanical part is scripted (stdlib Python, run from this skill's folder; th
 ```bash
 python scripts/a4e.py fetch a4e/                       # raw A4E pages: four saved tiers (T1-T4+) + the high-velocity pull
 python scripts/scan_candidates.py --a4e-dir a4e/ --orders orders.json \
-    --killed <ids> --exclude-prefix "<family>,<family>" --extra-held <ids>   # live verification + gates (default mode)
+    --extra-held <ids> --report --wallet <ISK> --buffer <ISK>               # live verification + gates, standard report
 python scripts/scan_candidates.py ... --safe                                 # the same scan with the original gate set
 python scripts/depth.py <type ids> --orders orders.json                      # depth checklist on the rows you will recommend
 python scripts/size_positions.py plan.json                                   # sizing, ranking, buffer walk
@@ -44,8 +44,14 @@ All already bake in the current hybrid fee profile (`buyFee=0.5` matching Perime
 
 Drop these before any live call:
 1. **Rows already in the portfolio** — open buy or sell orders, and stock held outside the order book (hold containers, hangar stock). Re-evaluating a held item is the portfolio review's job.
-2. **Items the user has killed.** When the user says they killed items (typically after an impact analysis of a game event) and not to buy them back, they stay out of every scan, Increase and redeploy for the rest of the conversation unless the user says otherwise. Keep the list from the conversation; pass it as `--killed`.
-3. **The killed items' families, as a conservative default.** The reasoning behind a kill usually applies to the whole family (the same name prefix: a faction, a meta line), so rows sharing a killed item's prefix are skipped (`--exclude-prefix`). The user only forbade the killed items themselves — name the excluded families in the report so they can overrule it.
+2. **Items on the user's exclusions list.** The scan reads `~/.eve-sde/trading-exclusions.json`, skips what is on it and prints every entry. A missing file means none. Add an entry only when the user explicitly asks for a standing exclusion, with the date and their words:
+
+   ```json
+   {"exclusions": [{"type_id": 123, "name": "Item name", "added": "YYYY-MM-DD", "request": "the user's words"}]}
+   ```
+
+   Use `name_prefix` instead of `type_id` when the user asks to leave out a whole family.
+3. **Exclusions for this run only.** What the user asks to leave out of the current request goes in `--exclude` (type ids) or `--exclude-prefix`. It does not carry over to the next run. A Kill or a cancelled order excludes nothing, and neither does a killed item's family: both can return when they pass the gates (the repeat-open check still applies, step 8). Say in the report what was excluded and why.
 4. **Weak repeat openings** — see step 8.
 
 ## Step 3 — scan: live margin and the gates
@@ -85,6 +91,7 @@ The scan runs in one of two modes and prints which one on its first lines; **say
 | Falling ask | A4E 7dSell under −12% | the sell side is dropping | same |
 | Ask spike | A4E 7dSell over +25% | the ask is far above its own 7-day level: an unproven price level that can revert | same |
 | Thin | one unit increment already exceeds the top of the sizing band of daily trades | cannot be sized to the market | increment 2 at or above the T3 floor |
+| Sales cap | Sold2Buy volume for one day leaves no room for one unit increment | the order could never be sized within the cap | two days for T2/T3/T4+ |
 | Stale | the top asks are over 14 days old | abandoned listings, not a real price | same |
 | Repeat opens | 2+ earlier buys of the type cancelled under half filled — opened repeatedly without filling. On by default; the run prints whether the check is on | step 8 | same; it is the fee stop-loss |
 
@@ -109,8 +116,8 @@ The thresholds are working values from the 9–10 October 2026 sessions, set fro
      - **Cancelled-at-zero-fills history.** Even a single recent cancel at zero fills is worth a one-line caution (the scan flags one earlier cancel under half filled); step 8 below covers the 2+ repeat-offender case.
      - **Disputed fills.** If the A4E columns and the live book disagree, or the user questions a fill claim, run `depth.py --diff 340 <type ids>` (two buy-side snapshots about five minutes apart) and quote the units sold into each bid.
      Anything excluded here — or rejected by the scan — goes in an "excluded after checks" list with its reason, so the user sees what was rejected and why.
-5. **Size.** Units are the sizing band of A4E trades/day in multiples of the unit increment (SKILL.md, sizing rule), **capped at one day of A4E Sold2Buy volume** (two days for T2/T3/T4+ rows in the default mode) — an order larger than the cap sits for days, and the scan's `units` column already applies it. In the default mode rows at or above the T3 floor are sized in pairs and a row that clears with a swept bid is sized at half. Hand the chosen unit counts to `scripts/size_positions.py` with the verified bid, margin at the ask and `profit_per_unit`; it ranks by M/1M/day, walks the buffer and flags SMALL-SLOT rows.
-6. Present candidates with: item name (as a code span, SKILL.md "Report conventions"), live-verified margin % (from the combined two-call calculation), daily trade count, the sized units as a share of daily trades, a one-line rationale, and a **suggested starting size** (units + ISK) per the sizing rule in SKILL.md. Label every row that relies on the high-velocity relaxation. Rows below the profit-per-slot floor are flagged, and the proposal reports the order count and tier mix before and after (SKILL.md, "Slot discipline"). Include the excluded-after-checks list and the families skipped under step 2. When the request is a full redeploy, follow [capital-allocation.md](capital-allocation.md).
+5. **Size.** Units are the sizing band of A4E trades/day in multiples of the unit increment (SKILL.md, sizing rule), **capped at one day of A4E Sold2Buy volume** (two days for T2/T3/T4+ rows in the default mode) — an order larger than the cap sits for days, the scan's `units` column already applies it, and a row with no room for one increment is rejected. In the default mode rows at or above the T3 floor are sized in pairs and a row that clears with a swept bid is sized at half. Hand the chosen unit counts to `scripts/size_positions.py` with the verified bid, margin at the ask and `profit_per_unit`; it ranks by M/1M/day, walks the buffer and flags SMALL-SLOT rows.
+6. Start from the scan's `--report` output (counts, the ranked and sized table, fill evidence) instead of rebuilding it, and add the depth-check findings and your read. Present candidates with: item name (as a code span, SKILL.md "Report conventions"), live-verified margin % (from the combined two-call calculation), daily trade count, the sized units as a share of daily trades, a one-line rationale, and a **suggested starting size** (units + ISK) per the sizing rule in SKILL.md. Label every row that relies on the high-velocity relaxation. Rows below the profit-per-slot floor are flagged, and the proposal reports the order count and tier mix before and after (SKILL.md, "Slot discipline"). Include the excluded-after-checks list and what was excluded under steps 2 and 3. When the request is a full redeploy, follow [capital-allocation.md](capital-allocation.md).
 7. Do NOT flag or comment on the character's existing open orders for the same item in this workflow — that's the portfolio review's job.
 8. **Repeat-open check — on for every scan row.** An item that was opened more than once and never filled is a weak candidate however good today's margin looks: the same open, wait, cancel cycle costs a broker fee each time and ties up escrow. The scan reads the ledger's order history (`~/.eve-sde/ledger.db`; run `sync_wallet_ledger` first, since it is only as current as the last sync) and finds the character from the open buys in `--orders`. It prints `repeat-open check ON` or `OFF` with the reason on its first lines — if it says OFF, say so in the report and do the manual check below for every row you recommend.
    - **2+ earlier buys of the type cancelled while less than half filled** reject the row ("opened Nx without filling"). A reprice keeps its `order_id`, so it does not count as another opening. One such cancel is a soft flag: say so on the row.

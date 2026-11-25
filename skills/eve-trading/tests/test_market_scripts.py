@@ -397,7 +397,7 @@ class Gates(unittest.TestCase):
         row = self.a4e_row(tr=12.0, s2b_vol=5.0, s2b_trd=5.0)
         relaxed = self.check(a=row, v=self.t3())
         self.assertEqual(relaxed["units"], 4)
-        self.assertEqual(relaxed["units"] % scan_candidates.EXPENSIVE_UNIT_INCREMENT, 0)
+        self.assertEqual(relaxed["units"] % self.PARAMS["expensive_unit_increment"], 0)
         self.assertEqual(self.check(a=row, v=self.t3(), safe=True)["units"], 5)
 
     def test_a_pair_is_not_thin_where_five_units_are(self):
@@ -452,7 +452,17 @@ class Gates(unittest.TestCase):
 
     def test_the_safe_mode_matches_the_original_gate_set_on_a_slow_t3_row(self):
         e = self.check(a=self.a4e_row(**self.SLOW), v=self.t3(fresh_fills=0, nm_real=1.0), safe=True)
-        self.assertEqual(sorted(h.split(" ")[0] for h in e["hard"]), ["S2B", "no"])   # S2B and fresh fills, nothing new
+        # S2B and fresh fills, plus the sales cap: three units a day into bids is under one five-unit increment
+        self.assertEqual(sorted(h.split(" ")[0] for h in e["hard"]), ["S2B", "no", "sales"])
+
+    def test_a_row_with_no_room_under_the_sales_cap_is_rejected(self):
+        for s2b in (0.0, 2.0):                                  # two days of 2 units is 4: under one five-unit increment
+            e = self.check(a=self.a4e_row(tr=40.0, s2b_vol=s2b, s2b_trd=s2b), v=self.t2())
+            self.assertTrue(any(r.startswith("sales cap") for r in e["hard"]), s2b)
+        e = self.check(a=self.a4e_row(tr=40.0, s2b_vol=3.0, s2b_trd=3.0), v=self.t2())
+        self.assertEqual((e["hard"], e["units"]), ([], 5))      # two days of 3 units holds exactly one increment
+        no_sales = self.check(a=self.a4e_row(tr=40.0, s2b_vol=0.0, s2b_trd=0.0), v=self.t4())
+        self.assertTrue(any(r.startswith("sales cap") for r in no_sales["hard"]))
 
     def test_the_parser_defaults_to_the_relaxed_mode(self):
         self.assertFalse(scan_candidates.build_parser().parse_args(["--a4e-dir", "x"]).safe)
@@ -511,6 +521,106 @@ class RepeatOpenCheck(unittest.TestCase):
             con, char, line = scan_candidates.open_repeat_check(path, None, set())
             self.assertIsNone(con)
             self.assertIn("OFF", line)
+
+
+class Exclusions(unittest.TestCase):
+    def write(self, folder, entries):
+        path = Path(folder) / "exclusions.json"
+        path.write_text(json.dumps({"exclusions": entries}))
+        return path
+
+    def entry(self, **kw):
+        return dict(added="2026-11-26", request="leave this one out", **kw)
+
+    def test_a_missing_default_file_means_no_exclusions(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = portfolio.EXCLUSIONS_DEFAULT
+            portfolio.EXCLUSIONS_DEFAULT = os.path.join(d, "none.json")
+            try:
+                types, prefixes, status = portfolio.load_exclusions()
+            finally:
+                portfolio.EXCLUSIONS_DEFAULT = old
+        self.assertEqual((types, prefixes), (set(), ()))
+        self.assertIn("none", status)
+
+    def test_a_named_file_that_is_missing_is_an_error(self):
+        with self.assertRaises(ValueError):
+            portfolio.load_exclusions("/nonexistent/exclusions.json")
+
+    def test_entries_are_read_with_their_provenance(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIn("is empty", portfolio.load_exclusions(self.write(d, []))[2])
+            path = self.write(d, [self.entry(type_id=7, name="Widget"), self.entry(name_prefix="Corpum")])
+            types, prefixes, status = portfolio.load_exclusions(path)
+        self.assertEqual((types, prefixes), ({7}, ("Corpum",)))
+        for text in ("Widget", "Corpum", "2026-11-26", "leave this one out"):
+            self.assertIn(text, status)
+
+    def test_an_entry_without_a_date_the_words_or_one_target_is_refused(self):
+        bad = [dict(type_id=7, added="2026-11-26"), dict(type_id=7, request="x"), dict(added="d", request="x"),
+               self.entry(type_id=7, name_prefix="Corpum"), "7"]
+        with tempfile.TemporaryDirectory() as d:
+            for entry in bad:
+                with self.assertRaises(ValueError, msg=entry):
+                    portfolio.load_exclusions(self.write(d, [entry]))
+            broken = Path(d) / "broken.json"
+            broken.write_text("{not json")
+            with self.assertRaises(ValueError):
+                portfolio.load_exclusions(broken)
+
+    def test_only_held_excluded_and_prefixed_rows_are_left_out(self):
+        rows = {t: dict(name=n, buy=1_000_000.0, sell=1_300_000.0)
+                for t, n in {1: "Held", 2: "Excluded", 3: "Corpum Thing", 4: "Killed last week", 5: "Fine"}.items()}
+        ids, excluded, by_prefix = scan_candidates.select_ids(rows, {1}, {2}, ("Corpum",), 6.0)
+        self.assertEqual((ids, excluded, by_prefix), ([4, 5], [2], ["Corpum Thing"]))
+
+    def test_the_scan_no_longer_takes_a_killed_list(self):
+        parser = scan_candidates.build_parser()
+        self.assertEqual(parser.parse_args(["--a4e-dir", "x"]).exclude, "")
+        self.assertNotIn("--killed", parser.format_help())
+
+
+class CandidateReport(unittest.TestCase):
+    PARAMS = size_positions.load_params()
+
+    def passing(self, name, bid, s2b=60.0, tr=200.0):
+        a = dict(name=name, tr=tr, s2b_vol=s2b, s2b_trd=40.0, d7buy=0.0, d7sell=0.0)
+        v = dict(t=1, bid=bid, ask=bid * 1.3, nb=25, ns=25, vol3=500.0, fresh_fills=2, near=5, stale_days=1.0,
+                 top_units=20, gap=None, range8=3.0, step2=0.0, nm_real=20.0)
+        v["nm_ask"] = v["nm_sup"] = market.nm(v["bid"], v["ask"])
+        return dict(t=1, name=name, a4e=a, live=v, **scan_candidates.evaluate(a, v, self.PARAMS, 7.5))
+
+    def build(self, **kw):
+        ok = sorted((self.passing("Fast", 1_000_000.0), self.passing("Slower", 8_000_000.0, tr=40.0),
+                     self.passing("Prototype 'Arbalest' Thing", 600_000.0, tr=100.0)), key=lambda r: -r["yield_m"])
+        return scan_candidates.report(["status one", "status two"], ok, [{}], [], self.PARAMS, **kw)
+
+    def test_counts_status_lines_and_ranked_rows(self):
+        text = self.build()
+        self.assertIn("- status one", text)
+        self.assertIn("**3 pass, 1 rejected, 0 not checkable.** Showing 3 by M/1M/day; 0 passing rows rank lower.", text)
+        for name in ("`Fast`", "`Slower`", "`Prototype 'Arbalest' Thing`"):
+            self.assertIn(name, text)
+        self.assertLess(text.index("`Fast`"), text.index("`Slower`"))
+        self.assertIn("| M/1M/day | Running | Flags |", text)
+        self.assertIn("| Sold into bids per day (units / trades) | Young filled bids | Cautions |", text)
+
+    def test_top_limits_the_rows_and_says_how_many_rank_lower(self):
+        text = self.build(top=1)
+        self.assertIn("Showing 1 by M/1M/day; 2 passing rows rank lower.", text)
+        self.assertNotIn("`Slower`", text)
+
+    def test_book_shape_and_cash_come_from_the_orders_and_wallet(self):
+        buys = [dict(price=1_000_000.0, remain=10), dict(price=30_000_000.0, remain=2)]
+        text = self.build(buys=buys, wallet=5e9, buffer=2e9)
+        self.assertIn("Open buys 2 -> 5.", text)
+        self.assertIn("against a 2,000.0M buffer", text)
+        self.assertNotIn("Open buys", self.build())
+
+    def test_no_passing_rows_still_reports_the_counts(self):
+        text = scan_candidates.report(["s"], [], [{}, {}], [], self.PARAMS)
+        self.assertIn("0 pass, 2 rejected", text)
+        self.assertNotIn("| # |", text)
 
 
 class ReviewHints(unittest.TestCase):
