@@ -25,3 +25,5 @@ Agreed with the user on 2026-11-26 after a candidate review went wrong (self-inv
 - `scan_candidates.py --report` prints the standard markdown report.
 - `size_positions.py` sizes rows from the T3 floor in pairs (`expensive_unit_increment`).
 - Version 1.8.0. Skill tests: 115 pass.
+- Follow-up from the user's rulings on two contradictions: the docs now say "HV floor" marks every high-velocity row
+  (the script is unchanged), and Workflow 3 covers every item held for sale, not only sell-only items.

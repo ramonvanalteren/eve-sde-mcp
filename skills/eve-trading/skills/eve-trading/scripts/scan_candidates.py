@@ -83,7 +83,8 @@ SOFT flags (shown on the row, judgement left to the caller)
   cushion under 2 points over the floor; thin top of the ask (<=2 units then a >=2% gap);
   ask 20-25% over its 7-day level; bids rising >15% over their 7-day level; 8-day average price
   range over 25%; the average price jumped 8%+ in the last one or two days; one earlier buy
-  cancelled under half filled; the row only clears through the high-velocity relaxation.
+  cancelled under half filled; "HV floor" marks every high-velocity row, the ones judged against
+  --hv-floor, whether or not they needed the lower floor.
   Default mode adds: "slow fills S2B ..." and "no fresh fills in top bids" (T2/T3/T4+, were gates),
   "bid swept ... half size", and "traded-price margin" when it sits within the 1-point slack.
 
