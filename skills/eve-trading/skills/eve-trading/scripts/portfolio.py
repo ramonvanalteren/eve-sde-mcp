@@ -154,3 +154,48 @@ def parse_id_list(text) -> set:
 
 def default_ledger() -> Path:
     return Path.home() / ".eve-sde" / "ledger.db"
+
+
+# The user's standing exclusions. It lives outside the repository, and an entry is written only when the
+# user explicitly asks for a standing exclusion; a Kill or a cancelled order is not such a request.
+EXCLUSIONS_DEFAULT = "~/.eve-sde/trading-exclusions.json"
+_EXCLUSION_HELP = ('expected {"exclusions": [{"type_id": 123 or "name_prefix": "...", "added": "YYYY-MM-DD", '
+                   '"request": "the user\'s words"}]}')
+
+
+def load_exclusions(path=None):
+    """(type ids, name prefixes, status line) from the user's exclusions file.
+
+    A missing default file means there are no exclusions. A file named explicitly must exist, and any
+    unreadable file or incomplete entry raises ValueError: an exclusion list is never silently ignored,
+    and an entry without the date and the user's words has no provenance.
+    """
+    explicit = path is not None
+    file = Path(path or EXCLUSIONS_DEFAULT).expanduser()
+    if not file.exists():
+        if explicit:
+            raise ValueError(f"exclusions file not found: {file}")
+        return set(), (), f"exclusions: none (no file at {file})"
+    try:
+        entries = _load(file)["exclusions"]
+        if not isinstance(entries, list):
+            raise TypeError("`exclusions` is not a list")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"exclusions file {file} is unreadable ({exc}); {_EXCLUSION_HELP}") from exc
+    types, prefixes, shown = set(), [], []
+    for i, e in enumerate(entries, start=1):
+        e = e if isinstance(e, dict) else {}
+        tid, prefix = e.get("type_id"), e.get("name_prefix")
+        has_target = (isinstance(tid, int)) != (isinstance(prefix, str) and bool(prefix.strip()))
+        if not has_target or not e.get("added") or not e.get("request"):
+            raise ValueError(f"exclusions file {file}, entry {i} is incomplete; {_EXCLUSION_HELP}")
+        if isinstance(tid, int):
+            types.add(tid)
+            label = e.get("name") or str(tid)
+        else:
+            prefixes.append(prefix.strip())
+            label = f"prefix '{prefix.strip()}'"
+        shown.append(f"{label} ({e['added']}: \"{e['request']}\")")
+    if not shown:
+        return set(), (), f"exclusions: none ({file} is empty)"
+    return types, tuple(prefixes), f"exclusions: {len(shown)} from {file}: " + "; ".join(shown)

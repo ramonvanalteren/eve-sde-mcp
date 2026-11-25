@@ -43,7 +43,7 @@ class ParameterBlock(unittest.TestCase):
         p = sp.load_params()
         lo, hi = p["sizing_band_pct_of_daily_trades"]
         self.assertTrue(0 < lo < hi <= 100)
-        self.assertGreater(p["unit_increment"], 0)
+        self.assertTrue(0 < p["expensive_unit_increment"] <= p["unit_increment"])
         self.assertIn(p["rank_by"], ("yield", "profit", "input"))
         self.assertGreater(p["min_profit_per_slot_isk"], 0)
         olo, ohi = p["comfortable_order_range"]
@@ -58,6 +58,7 @@ class ParameterBlock(unittest.TestCase):
         result = run_quietly([("Probe", 1_000_000, 10, 15.0, 100, 150_000, "")], wallet=1e9)
         got = result["parameters"]
         self.assertEqual(got["unit_increment"], p["unit_increment"])
+        self.assertEqual(got["expensive_unit_increment"], p["expensive_unit_increment"])
         self.assertEqual(got["rank_by"], p["rank_by"])
         self.assertEqual(got["trade_share_band"], tuple(p["sizing_band_pct_of_daily_trades"]))
         self.assertEqual(got["min_profit_per_slot"], p["min_profit_per_slot_isk"])
@@ -172,6 +173,14 @@ class SkillStructure(unittest.TestCase):
         review = (SKILL / "reference" / "workflow-portfolio-review.md").read_text(encoding="utf-8")
         self.assertIn("keeps its `order_id` and resets `issued`", review)
         self.assertIn("`volumeTotal − volumeRemain`", review)
+
+    def test_the_base_rules_are_stated_first(self):
+        skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertLess(skill.index("## Base rules"), skill.index("## Scope"))
+        for rule in ("If the skill states the rule, follow it.", "do it once; never add it as a rule",
+                     "propose it and ask first", "only be added by an explicit request",
+                     "contradict each other, say so and ask for a resolution"):
+            self.assertIn(rule, skill)
 
     def test_item_name_code_span_rule_is_stated_and_checklisted(self):
         skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")

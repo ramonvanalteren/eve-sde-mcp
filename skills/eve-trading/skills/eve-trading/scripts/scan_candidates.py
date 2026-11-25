@@ -4,8 +4,19 @@ scan_candidates.py — Workflow 1 candidate scan with the fill-evidence gates.
 
     python scripts/a4e.py fetch a4e/                  # raw A4E pages (saved tiers + high-velocity pull)
     python scripts/scan_candidates.py --a4e-dir a4e/ --orders orders.json \\
-        [--safe] [--killed 18869,19111] [--exclude-prefix Corpum,"Dark Blood"] [--extra-held 14174,37849] \\
+        [--report [--top 16] [--wallet ISK] [--buffer ISK]] [--safe] [--extra-held 14174,37849] \\
+        [--exclude 18869,19111] [--exclude-prefix Corpum,"Dark Blood"] [--exclusions FILE] \\
         [--hv-floor 7.5 | --no-hv] [--ledger ~/.eve-sde/ledger.db --character-id N] [--json scan.json]
+
+EXCLUSIONS
+  Held types are skipped. Beyond that, only two things exclude an item: the user's standing list
+  (~/.eve-sde/trading-exclusions.json, or --exclusions; written only on the user's explicit request,
+  missing file = none) and --exclude / --exclude-prefix, which apply to this run only. A Kill or a
+  cancelled order excludes nothing; the repeat-open gate still applies. The run prints what it excluded.
+
+REPORT
+  --report replaces the console table with the markdown report: the run's status lines, the counts, the
+  top rows by M/1M/day sized by size_positions.py, and their fill evidence. Row choice is mechanical.
 
 TWO MODES (the run prints which one it used; say so in the report)
   default (relaxed)  Added 2026-11-10 at the user's direction. With idle cash a bid that never fills costs
@@ -34,7 +45,7 @@ What the relaxed mode changes (everything not listed here is the same in both mo
 Run `sync_wallet_ledger` first: the repeat-open check reads the ledger's order history, which is
 only as current as the last sync. The ledger and the character are found on their own (see below).
 
-What it does: reads every A4E row, drops types already held or killed, keeps rows whose A4E
+What it does: reads every A4E row, drops types already held or excluded, keeps rows whose A4E
 margin is within reach of the floor, then verifies each survivor live (public ESI book and
 history — the two-call margin at the competitive bid) and applies the gates below. It prints
 the rows that pass, ranked by M/1M/day, and the rejected rows with their reasons so the report
@@ -61,6 +72,8 @@ HARD gates (a row fails if any applies; "safe" marks what only applies in --safe
                below is what catches positions that never fill.
   thin         one increment already exceeds the top of the sizing band of daily trades (the
                increment is 5 units; 2 for rows at or above the T3 floor in default mode)
+  sales cap    the size cap (Sold2Buy volume for one day; two days for T2/T3/T4+ in default mode)
+               leaves no room for one increment
   stale        the top asks are older than 14 days (abandoned listings)
   repeat open  2+ earlier buy orders for the type cancelled at under half filled — the position
                was opened repeatedly without filling. On by default: the ledger is
@@ -70,7 +83,8 @@ SOFT flags (shown on the row, judgement left to the caller)
   cushion under 2 points over the floor; thin top of the ask (<=2 units then a >=2% gap);
   ask 20-25% over its 7-day level; bids rising >15% over their 7-day level; 8-day average price
   range over 25%; the average price jumped 8%+ in the last one or two days; one earlier buy
-  cancelled under half filled; the row only clears through the high-velocity relaxation.
+  cancelled under half filled; "HV floor" marks every high-velocity row, the ones judged against
+  --hv-floor, whether or not they needed the lower floor.
   Default mode adds: "slow fills S2B ..." and "no fresh fills in top bids" (T2/T3/T4+, were gates),
   "bid swept ... half size", and "traded-price margin" when it sits within the 1-point slack.
 
@@ -87,6 +101,8 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -114,7 +130,6 @@ HV_MIN_TRADES, HV_MIN_VOL, HV_MIN_ORDERS = 100, 100, 15
 # document together.
 RELAXED_FILL_TIERS = ("T2", "T3", "T4+")   # tiers where the will-it-fill checks are soft flags, not gates (T4+ added 2026-11-15)
 EXPENSIVE_TIERS = ("T3", "T4+")      # unit price at or above the T3 floor
-EXPENSIVE_UNIT_INCREMENT = 2         # these rows are sized in pairs; a five-unit T3 slot is 100-250M
 RELAXED_S2B_DAYS = 2                 # size cap for relaxed rows, in days of A4E Sold2Buy volume (safe: 1)
 SWEPT_ASK_WEAK_PCT = -5.0            # a swept bid is only a gate while the ask is also weakening
 SWEPT_SIZE_FACTOR = 0.5              # a row that clears with a swept bid is sized at half
@@ -145,7 +160,8 @@ def evaluate(a: dict, v: dict, params: dict, hv_floor, cancels: int = 0, safe: b
     lo, hi = params["sizing_band_pct_of_daily_trades"]
     tier = market.tier_of(v["bid"], params["tiers_isk_per_unit"])
     relax_fill = relaxed_mode and tier in RELAXED_FILL_TIERS
-    inc = EXPENSIVE_UNIT_INCREMENT if (relaxed_mode and tier in EXPENSIVE_TIERS) else inc0
+    # expensive rows are sized in pairs: a five-unit T3 slot is 100-250M
+    inc = params["expensive_unit_increment"] if (relaxed_mode and tier in EXPENSIVE_TIERS) else inc0
     tr = a["tr"] or 0
     hv = is_high_velocity(tr, v["vol3"], v["nb"], v["ns"])
     floor, hv_relaxed = entry_floor(tier, tr, v["nb"] + v["ns"], hv, hv_floor)
@@ -203,7 +219,10 @@ def evaluate(a: dict, v: dict, params: dict, hv_floor, cancels: int = 0, safe: b
 
     mid = (lo + hi) / 2 / 100
     base = max(inc, round(mid * tr / inc) * inc)
-    cap = int(s2b_vol * (RELAXED_S2B_DAYS if relax_fill else 1) // inc * inc)
+    cap_days = RELAXED_S2B_DAYS if relax_fill else 1
+    cap = int(s2b_vol * cap_days // inc * inc)
+    if not cap:
+        hard.append(f"sales cap: {s2b_vol:.0f}u/day into bids over {cap_days}d is under one {inc}-unit increment")
     units = max(inc, min(base, cap)) if cap else inc
     if cap and cap < base:
         soft.append(f"S2B-capped {cap}")
@@ -274,6 +293,93 @@ def mode_line(safe: bool) -> str:
             f"traded-price margin test on; --safe restores the original gates)")
 
 
+def select_ids(rows: dict, held: set, excluded_ids: set, prefixes: tuple, prefilter: float):
+    """(ids to check live, excluded ids found in the A4E rows, names excluded by prefix)."""
+    ids, excluded, by_prefix = [], [], []
+    for t, r in rows.items():
+        if t in held:
+            continue
+        if t in excluded_ids:
+            excluded.append(t)
+        elif prefixes and r["name"].startswith(prefixes):
+            by_prefix.append(r["name"])
+        elif market.nm(r["buy"], r["sell"]) >= prefilter:
+            ids.append(t)
+    return ids, excluded, by_prefix
+
+
+def _isk(x: float) -> str:
+    """Compact ISK: 1.661M, 566.5K, 1,085.1M."""
+    if abs(x) >= 100e6:
+        return f"{x / 1e6:,.1f}M"
+    if abs(x) >= 1e6:
+        return f"{x / 1e6:.4g}M"
+    return f"{x / 1e3:.4g}K"
+
+
+def report(status_lines, ok, bad, err, params, buys=None, top=16, wallet=None, buffer=None, excluded_names=()) -> str:
+    """The markdown candidate report: status, counts, the top rows by M/1M/day and their fill evidence.
+
+    Sizing, ranking, flags and totals come from size_positions.py, so nothing here is chosen by hand.
+    """
+    shown = [r for r in ok if r["ppu"] > 0][:top]
+    lines = [f"- {s}" for s in status_lines]
+    lines += ["", f"**{len(ok)} pass, {len(bad)} rejected, {len(err)} not checkable.** "
+                  f"Showing {len(shown)} by M/1M/day; {len(ok) - len(shown)} passing rows rank lower."]
+    if excluded_names:
+        lines.append("Excluded by name prefix: " + ", ".join(f"`{n}`" for n in excluded_names))
+    if not shown:
+        return "\n".join(lines)
+
+    candidates = [(r["name"], r["live"]["bid"], r["units"], r["ppu"] / (r["live"]["bid"] * (1 + market.BUY_FEE)) * 100,
+                   r["a4e"]["tr"], r["ppu"], "") for r in shown]
+    tier_escrow = None
+    if buys is not None:
+        tier_escrow = {}
+        for b in buys:
+            tier = size_positions.tier_of(b["price"])
+            tier_escrow[tier] = tier_escrow.get(tier, 0) + b["price"] * b["remain"]
+    with contextlib.redirect_stdout(io.StringIO()):
+        sized = size_positions.size_positions(
+            candidates, wallet=wallet or 0.0, stop_at_buffer=False, buffer_target_isk=buffer,
+            current_open_orders=None if buys is None else len(buys), current_tier_escrow=tier_escrow)
+    by_name = {r["name"]: r for r in shown}
+
+    lines += ["", "| # | Item | Unit price | Units | Cost | Margin ask / traded | Trades/day (% of day) | Total profit "
+                  "| M/1M/day | Running | Flags |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    evidence = ["", "| # | Sold into bids per day (units / trades) | Young filled bids | Cautions |", "|---|---|---|---|"]
+    for i, s in enumerate(sized["rows"], start=1):
+        r = by_name[s["name"]]
+        a, v = r["a4e"], r["live"]
+        flags = s["flags"] + (["HV floor"] if "HV floor" in r["soft"] else [])
+        real = v.get("nm_real")
+        share = "" if s["trade_share_pct"] is None else f" ({s['trade_share_pct']:.0f}%)"
+        lines.append(
+            f"| {i} | `{s['name']}` | {_isk(s['unit_price'])} | {s['units']} | {_isk(s['cost'])} | "
+            f"{v['nm_ask']:.1f}% / {'-' if real is None else f'{real:.1f}%'} | {s['trades_per_day']:.0f}{share} | "
+            f"{_isk(s['total_profit'])} | {s['yield_m_per_1m_day']:.1f} | {_isk(s['running_total'])} | {', '.join(flags)} |")
+        cautions = [x for x in r["soft"] if x != "HV floor"]
+        evidence.append(f"| {i} | {a['s2b_vol']:.0f} / {a['s2b_trd']:.0f} | {v['fresh_fills']} of {v['near']} | "
+                        f"{'; '.join(cautions)} |")
+    lines += evidence
+    lines += ["", f"- All {len(sized['rows'])} rows: {_isk(sized['total'])} deployed, "
+                  f"{_isk(sized['total_profit'])} profit if each cycles once."]
+    if sized["order_count_after"] is not None:
+        before = size_positions._fmt_mix(tier_escrow)
+        after = dict(tier_escrow)
+        for s in sized["rows"]:
+            after[s["tier"]] = after.get(s["tier"], 0) + s["cost"]
+        lines.append(f"- Open buys {len(buys)} -> {sized['order_count_after']}. Tier mix (escrow) {before} -> "
+                     f"{size_positions._fmt_mix(after)}.")
+    if wallet is not None:
+        left = wallet - sized["total"]
+        vs = "" if buffer is None else f" against a {_isk(buffer)} buffer"
+        lines.append(f"- Cash left after all rows: {_isk(left)}{vs}.")
+    for name in sized["excluded"]:
+        lines.append(f"- Left out by the sizer: `{name}` ({sized['excluded_reasons'][name]}).")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Workflow 1 candidate scan (default: relaxed fill gates; --safe: the original gates)")
     ap.add_argument("--safe", action="store_true",
@@ -281,8 +387,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "one-day size cap, no traded-price test)")
     ap.add_argument("--a4e-dir", required=True, help="folder written by `a4e.py fetch`")
     ap.add_argument("--orders", help="get_character_orders result (held types are skipped)")
-    ap.add_argument("--killed", default="", help="comma-separated type ids the user killed — never re-added")
-    ap.add_argument("--exclude-prefix", default="", help="comma-separated name prefixes (a killed item's family)")
+    ap.add_argument("--exclude", default="", help="comma-separated type ids to leave out of this run only (user's request)")
+    ap.add_argument("--exclude-prefix", default="",
+                    help="comma-separated name prefixes to leave out of this run only (user's request)")
+    ap.add_argument("--exclusions", help=f"the user's standing exclusions (default {portfolio.EXCLUSIONS_DEFAULT})")
+    ap.add_argument("--report", action="store_true", help="print the markdown report instead of the console table")
+    ap.add_argument("--top", type=int, default=16, help="rows in the report, by M/1M/day")
+    ap.add_argument("--wallet", type=float, help="wallet balance in ISK, for the report's cash line")
+    ap.add_argument("--buffer", type=float, help="cash buffer the user stated, in ISK, for the report's cash line")
     ap.add_argument("--extra-held", default="", help="type ids held outside the order book (hold containers, hangar stock)")
     ap.add_argument("--hv-floor", type=float, default=7.5, help="relaxed entry floor for high-velocity rows (user-directed)")
     ap.add_argument("--no-hv", action="store_true", help="disable the high-velocity relaxation")
@@ -307,26 +419,25 @@ def main(argv=None) -> int:
         held = {x["type_id"] for x in o["buys"] + o["sells"]}
         mine = {x["order_id"] for x in o["buys"]}
     held |= portfolio.parse_id_list(args.extra_held)
-    killed = portfolio.parse_id_list(args.killed)
-    prefixes = tuple(p.strip() for p in args.exclude_prefix.split(",") if p.strip())
+    try:
+        standing, standing_prefixes, exclusions_status = portfolio.load_exclusions(args.exclusions)
+    except ValueError as exc:
+        print(f"Input error: {exc}", file=sys.stderr)
+        return 2
+    run_only = portfolio.parse_id_list(args.exclude)
+    run_prefixes = tuple(p.strip() for p in args.exclude_prefix.split(",") if p.strip())
+    ids, excluded, by_prefix = select_ids(rows, held, standing | run_only, standing_prefixes + run_prefixes, args.prefilter)
+    run_note = ""
+    if run_only or run_prefixes:
+        run_note = f" | this run only: {len(run_only)} ids, prefixes {', '.join(run_prefixes) or 'none'}"
+    count_line = (f"A4E rows {len(rows)} | held skipped {sum(1 for t in rows if t in held)} | excluded {len(excluded)} | "
+                  f"prefix-excluded {len(by_prefix)} | checking live {len(ids)} | HV floor "
+                  f"{'off' if hv_floor is None else f'{hv_floor:g}% (user-directed relaxation)'}")
 
-    skipped_family = []
-    ids = []
-    for t, r in rows.items():
-        if t in held or t in killed:
-            continue
-        if prefixes and r["name"].startswith(prefixes):
-            skipped_family.append(r["name"])
-            continue
-        if market.nm(r["buy"], r["sell"]) >= args.prefilter:
-            ids.append(t)
-    print(f"A4E rows {len(rows)} | held/killed skipped {sum(1 for t in rows if t in held or t in killed)} | "
-          f"family-excluded {len(skipped_family)} | checking live {len(ids)} | HV floor "
-          f"{'off' if hv_floor is None else f'{hv_floor:g}% (user-directed relaxation)'}")
-
-    print(mode_line(args.safe))
     con, char, status = open_repeat_check(args.ledger, args.character_id, mine)
-    print(status)
+    status_lines = [count_line, mode_line(args.safe), status, exclusions_status + run_note]
+    if not args.report:
+        print("\n".join(status_lines))
 
     data = market.fetch_many(ids)
     out = []
@@ -342,6 +453,14 @@ def main(argv=None) -> int:
     ok = sorted((r for r in out if "error" not in r and not r["hard"]), key=lambda r: -r["yield_m"])
     bad = sorted((r for r in out if "error" not in r and r["hard"]), key=lambda r: -r["yield_m"])
     err = [r for r in out if "error" in r]
+    if args.json:
+        with open(args.json, "w") as f:
+            json.dump(out, f, default=str)
+    if args.report:
+        buys = portfolio.load_orders(args.orders)["buys"] if args.orders else None
+        print(report(status_lines, ok, bad, err, params, buys=buys, top=args.top, wallet=args.wallet,
+                     buffer=args.buffer, excluded_names=sorted(by_prefix)))
+        return 0
     print(f"\n{len(ok)} pass, {len(bad)} rejected, {len(err)} not checkable\n")
     head = (f"{'item':40s}{'t':>3s}{'bid':>12s}{'ask':>12s}{'nm@ask':>7s}{'sup':>6s}{'real':>6s}{'S2Bu':>6s}{'S2Bt':>5s}"
             f"{'7dBuy':>6s}{'7dSell':>7s}{'tr/d':>5s}{'vol3':>6s}{'nb/ns':>7s}{'fresh':>6s}{'units':>6s}{'cost M':>7s}{'prof M':>7s}{'M/1M/d':>7s}")
@@ -358,14 +477,11 @@ def main(argv=None) -> int:
         for r in bad[: args.show_rejected]:
             v = r["live"]
             print(f"  {r['name'][:40]:40s} nm@ask {v['nm_ask']:5.1f} sup {v['nm_sup']:5.1f} real {v['nm_real']:5.1f} | {'; '.join(r['hard'])}")
-    if skipped_family:
-        print(f"\nExcluded as the killed items' family ({len(skipped_family)}): {', '.join(sorted(skipped_family)[:12])}"
-              f"{' …' if len(skipped_family) > 12 else ''}")
+    if by_prefix:
+        print(f"\nExcluded by name prefix ({len(by_prefix)}): {', '.join(sorted(by_prefix)[:12])}"
+              f"{' …' if len(by_prefix) > 12 else ''}")
     if err:
         print(f"\nNot checkable (one-sided book, short history or fetch failure): {', '.join(r['name'] for r in err)}")
-    if args.json:
-        with open(args.json, "w") as f:
-            json.dump(out, f, default=str)
     return 0
 
 
