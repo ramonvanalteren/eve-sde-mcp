@@ -4,6 +4,7 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 
 ## Contents
 - [The two locations and their fees](#the-two-locations-and-their-fees)
+- [Order fees by station](#order-fees-by-station)
 - [Fee & margin math](#fee--margin-math)
 - [Margin thresholds](#margin-thresholds)
 - [The mandatory two-call ESI verification procedure](#the-mandatory-two-call-esi-verification-procedure)
@@ -18,16 +19,28 @@ Everything about computing a trustworthy margin in this strategy: the fee profil
 As of **2026-09-12**, this strategy trades out of two locations, not one:
 
 - **Perimeter - 0.0% Neutral States Market HQ** — `location_id 1044752365771`, system 30000144 (Perimeter, 1 jump from Jita). **Buy-side.** New buy orders go here with `range: "1"`, so they still reach sellers at Jita 4-4.
-  - Broker fee: **flat 100 ISK structure fee + SCC surcharge**, additive.
-    - Placing an order costs `0.5% × order value + 100 ISK`.
-    - Changing an open order's price costs `0.1% × new price × units still open`, plus `0.5% of any escrow the change adds`, plus 100 ISK. (Checked against the wallet journal on 2026-11-11 and 2026-11-26.)
-    - The surcharge is booked as `market_provider_tax`, not `brokers_fee`.
+  - Broker fee: the structure's own **flat 100 ISK** plus a **0.5% SCC surcharge**, additive ([order fees by station](#order-fees-by-station)).
   - The flat 100 ISK is 0.02% or less at tier ticket sizes (≥500K ISK), so the margin formula below and the A4E URLs model the buy side as 0.5% alone. The ledger's fee/order matching needs the full additive model — see `get_station_fees`.
-- **Jita 4-4 Caldari Navy Assembly Plant** — `location_id 60003760`, system 30000142 (Jita). **Sell-side, unchanged.** Sell orders stay here — this is where buyer foot-traffic actually is. Broker fee: **1.5%**. Sales tax: **3.4%** (charged on sell fill; sales tax is a sell-side-only cost, so it's unaffected by where the item was bought).
+- **Jita 4-4 Caldari Navy Assembly Plant** — `location_id 60003760`, system 30000142 (Jita). **Sell-side, unchanged.** Sell orders stay here — this is where buyer foot-traffic actually is. Broker fee: **1.5%** in the margin formula, 1.491% as charged ([order fees by station](#order-fees-by-station)). Sales tax: **3.4%** (charged on sell fill; sales tax is a sell-side-only cost, so it's unaffected by where the item was bought).
 
 This is a **hybrid**, not a full relocation — don't assume sell-side fees dropped too. **Legacy buy orders placed before 2026-09-12 may still sit at Jita 4-4** (`locationId: 60003760` on that specific order, from `get_character_orders`) until they fill or get manually migrated — always check each order's own `locationId` rather than assuming everything moved.
 
 Total round-trip friction is now ~5.4% (down from 6.4%), entirely from the buy-side broker fee dropping 1.5% → 0.5%.
+
+## Order fees by station
+
+Placing and repricing costs belong to the station the order sits in. Read the order's own `locationId`, and never carry one station's figures to another.
+
+| Station | Placing an order | Changing an open order's price | In the wallet journal |
+|---|---|---|---|
+| Perimeter HQ (`1044752365771`) | `0.5% × order value + 100 ISK` | `0.1% × new price × units still open`, plus `0.5% × any value added`, plus 100 ISK | percentage: `market_provider_tax` (SCC surcharge); 100 ISK: `brokers_fee` |
+| Jita 4-4 (`60003760`) | `1.491% × order value` | `0.298% × new price × units still open`, plus `1.491% × any value added` | one `brokers_fee` entry; no surcharge, no flat fee |
+| Any other station | not covered by either row | not covered by either row | |
+
+- "Value added" is the increase in price × units still open (on a buy order, the added escrow). A price cut adds none.
+- The Jita rate depends on this character's Broker Relations skill and standings, and no Jita fee goes below 100 ISK. A reprice costs a fifth of the placement percentage with Advanced Broker Relations V.
+- For any other station, check `get_station_fees` and the journal before quoting a cost, and say so when the rate is unknown. A rate the tool marks `default` is a placeholder; one it marks `derived` comes from `brokers_fee` rows only, so it leaves out a structure's surcharge.
+- Checked against the wallet journal: Perimeter HQ on 2026-11-11 and 2026-11-26; Jita 4-4 placements and price cuts on 2026-11-26. No Jita price rise was in the orders checked, so its value-added term is the game's rule, not a checked figure.
 
 ## Fee & margin math
 

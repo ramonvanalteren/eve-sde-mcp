@@ -6,7 +6,7 @@ It runs on its own ledger (`~/.eve-sde/ledger.db`), not just live ESI calls, bec
 
 Trigger this workflow explicitly ("daily close", "close today", "P&L for this week/month") — don't run it as part of a default portfolio review.
 
-**Since the Perimeter move, expect more variance in per-order `brokers_fee` journal entries** (some at 0.5% + flat from Perimeter HQ, some at 1.5% from legacy Jita 4-4 orders) — that's expected during and after the transition, not a data error, since this workflow pulls the *actual* fee paid per the wallet journal rather than assuming a single flat rate. The per-station models behind that matching are visible via `get_station_fees`.
+**Since the Perimeter move, expect more variance in per-order `brokers_fee` journal entries** (a flat 100 ISK per placement or price change at Perimeter HQ, whose percentage is booked apart as `market_provider_tax`; a percentage of order value at Jita 4-4, see [order fees by station](margin-verification.md#order-fees-by-station)) — that's expected during and after the transition, not a data error, since this workflow pulls the *actual* fee paid per the wallet journal rather than assuming a single flat rate. The per-station models behind that matching are visible via `get_station_fees`.
 
 Tools: `sync_wallet_ledger`, `run_daily_close`, `get_daily_close`, `get_close_range`, `get_open_lots`.
 

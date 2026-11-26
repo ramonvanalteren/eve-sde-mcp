@@ -20,10 +20,10 @@ REPORT
 
 TWO MODES (the run prints which one it used; say so in the report)
   default (relaxed)  Added 2026-11-10 at the user's direction. With idle cash a bid that never fills costs
-                     the broker fee (0.5% at placement, about 0.1% per reprice plus 0.5% of added escrow), so the
-                     checks that only ask "will it fill?" stop being gates for T2, T3 and T4+ rows. The
-                     checks that ask "will the price hold after it fills?" stay, and one is added: the
-                     margin at the price the item actually traded at. See the changes below.
+                     the broker fee (at Perimeter HQ 0.5% at placement, about 0.1% per reprice plus 0.5% of
+                     added escrow), so the checks that only ask "will it fill?" stop being gates for T2, T3
+                     and T4+ rows. The checks that ask "will the price hold after it fills?" stay, and one
+                     is added: the margin at the price the item actually traded at. See the changes below.
   --safe             The original gate set, unchanged: every fill check is a hard gate in every tier,
                      a swept bid always rejects, sizing is capped at one day of Sold2Buy in units of 5,
                      and there is no traded-price test.
@@ -94,7 +94,8 @@ days for T2/T3/T4+ in default mode). A row that clears with a swept bid is sized
 
 The repeat-open check is what limits the fee loss on bids that never fill: two earlier opens
 that were cancelled under half filled end the item, so the loss per item stays near two placement
-fees. Reprice a slow bid sparingly — each reprice costs about another 0.1% of its value, plus 0.5% of added escrow.
+fees. Reprice a slow bid sparingly — at Perimeter HQ each reprice costs about another 0.1% of its value, plus
+0.5% of added escrow.
 """
 
 from __future__ import annotations
