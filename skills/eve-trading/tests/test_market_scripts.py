@@ -7,7 +7,9 @@ script and the document cannot drift apart.
 Stdlib only:  python3 -m unittest discover -s skills/eve-trading/tests -v
 """
 
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
@@ -16,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SKILL = Path(__file__).resolve().parents[1] / "skills" / "eve-trading"
 sys.path.insert(0, str(SKILL / "scripts"))
@@ -629,6 +632,26 @@ class ReviewHints(unittest.TestCase):
         self.assertEqual(review_portfolio.verdict_hint(5.5, 6.0, 10), "KILL?")          # clear breach
         self.assertEqual(review_portfolio.verdict_hint(9.6, 10.4, 10), "EDGE")          # straddles the floor
         self.assertEqual(review_portfolio.verdict_hint(9.4, 9.6, 10), "EDGE")           # under a point below it
+
+
+class BuysTable(unittest.TestCase):
+    def test_the_margin_uses_perimeter_s_fee_there_and_jita_s_elsewhere(self):
+        buys = [dict(orderId=i, typeId=i, typeName=f"Item {i}", price=1000.0, volumeRemain=10, volumeTotal=10,
+                     locationId=loc, issued=iso(48), isBuyOrder=True, range="1")
+                for i, loc in ((1, market.PERIMETER), (2, 60000691))]
+        book = ([order(10, 1300.0, 10), order(11, 990.0, 10, buy=True)], history())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "orders.json"
+            path.write_text(json.dumps({"orders": buys}))
+            args = review_portfolio.argparse.Namespace(orders=str(path), tx=None, a4e_dir=None, no_hv=True, hv_floor=7.5)
+            out = io.StringIO()
+            with mock.patch.object(market, "fetch_many", return_value={1: book, 2: book}), \
+                    mock.patch.object(review_portfolio, "names_for", return_value={}), contextlib.redirect_stdout(out):
+                self.assertEqual(review_portfolio.cmd_buys(args), 0)
+        rows = {line.split()[1]: line for line in out.getvalue().splitlines() if line.startswith("Item ")}
+        for item, fee in (("1", market.BUY_FEE), ("2", market.SELL_FEE)):
+            expected = review_portfolio.review_report.margin(1000.0, 1300.0, fee)
+            self.assertIn(f"{expected:8.1f}", rows[item])
 
 
 class SkillMentionsItsScripts(unittest.TestCase):

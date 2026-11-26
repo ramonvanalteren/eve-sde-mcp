@@ -162,8 +162,13 @@ Fills convert escrow into hangar stock, and that stock is real financial exposur
 
 Repricing/undercut-checking stays out of scope for this skill (per Scope in SKILL.md) — Claude doesn't track queue position. But margin data already surfaced during a review is useful for the user's own call on whether a reprice is worth it, so here's the rule of thumb to mention if relevant. **This now splits by leg, since the buy and sell sides run different fee rates:**
 
-- **Buy-side reprices (Perimeter HQ, 0.5% fee)**: cost ≈ 0.5/margin as a fraction of the edge. On a 15% margin item, one reprice now costs only ≈3.3% of the edge — much cheaper than before the move. Reprice buy-side positions freely down to roughly ~8-10% margin; below that, the reprice cost starts eating a real chunk of a thin edge. This lines up with the flat 10% hold floor above — a position near the floor is also close to where reprice economics stop being cheap, which is worth mentioning together if both come up.
-- **Sell-side reprices (Jita 4-4, 1.5% fee, unchanged)**: the original logic still applies as-is — don't reprice a position sitting below ~20-25% margin; above ~40-50%, reprice freely; 25-40% is a judgment call (liquidity, distance off top-of-book, recent reprice frequency).
+- **Buy-side reprices (Perimeter HQ)**: a price change costs about 0.1% of the open order value, plus 0.5% of any escrow it adds ([margin-verification.md](margin-verification.md#order-fees-by-station); a buy order at any other station costs that station's rate). Before the added escrow that is ≈ 0.1/margin as a fraction of the edge: on a 15% margin item, under 1%. Reprice buy-side positions freely down to roughly ~8-10% margin (a threshold set when a reprice was taken to cost 0.5%), which lines up with the flat 10% hold floor above.
+- **Sell-side reprices (Jita 4-4)**: a price change costs about 0.3% of the open order value, plus 1.5% of any value a price rise adds, with no surcharge or flat fee. Go by the margin left at the new price, after sales tax and broker fee, over what was paid (bands the user approved on 2026-11-26):
+  - **10% or more**: reprice freely.
+  - **5% to 10%**: a judgment call (daily volume, distance from the lowest ask, how often it has already been repriced).
+  - **Under 5%**: stop undercutting, and decide once whether to wait or dump.
+
+  One 0.3% fee takes about 3% of the remaining profit at a 10% margin and about 7% at 5%; the price cut itself is usually the larger cost.
 
 This asymmetry is new since the 2026-09-12 Perimeter move — the two legs of the same trade now have meaningfully different reprice economics, worth remembering when comparing "should I reprice this" across a mixed buy/sell portfolio.
 
