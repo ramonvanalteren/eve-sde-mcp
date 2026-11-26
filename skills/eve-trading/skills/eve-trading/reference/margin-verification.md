@@ -40,6 +40,7 @@ Placing and repricing costs belong to the station the order sits in. Read the or
 - "Value added" is the increase in price × units still open (on a buy order, the added escrow). A price cut adds none.
 - The Jita rate depends on this character's Broker Relations skill and standings, and no Jita fee goes below 100 ISK. A reprice costs a fifth of the placement percentage with Advanced Broker Relations V.
 - For any other station, check `get_station_fees` and the journal before quoting a cost, and say so when the rate is unknown. A rate the tool marks `default` is a placeholder; one it marks `derived` comes from `brokers_fee` rows only, so it leaves out a structure's surcharge.
+- In margins, the review script costs a buy order at any station other than Perimeter HQ at Jita 4-4's 1.5% (user's call, 2026-11-26).
 - Checked against the wallet journal: Perimeter HQ on 2026-11-11 and 2026-11-26; Jita 4-4 placements and price cuts on 2026-11-26. No Jita price rise was in the orders checked, so its value-added term is the game's rule, not a checked figure.
 
 ## Fee & margin math

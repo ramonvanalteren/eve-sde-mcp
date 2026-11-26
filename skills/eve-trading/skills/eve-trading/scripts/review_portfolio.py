@@ -17,6 +17,7 @@ Inputs are the saved eve-sde tool results described in portfolio.py. Nothing is 
 cancelled; every verdict is the caller's judgement — the `hint` column is only a prompt.
 
 buys   One row per open buy order, from public ESI books (two-call margin at the competitive bid).
+       Margins use Perimeter HQ's broker fee for an order there and Jita 4-4's for one anywhere else.
        nm@comp   margin at max(own price, best competing bid) against the top Jita ask — THE live margin
        nm@dur    the same against the durable ask (first price with >=3 units behind it)
        nm@own    margin at the order's own price against the top ask (shown because it matters when the
@@ -124,13 +125,15 @@ def cmd_buys(args) -> int:
         # The relaxed floor needs A4E evidence of >=100 trades/day; without a row the flat hold floor applies.
         hv = bool(a) and scan_candidates.is_high_velocity(a.get("tr") or 0, hs["vol3"], nb, ns)
         floor = hv_floor if (hv and hv_floor is not None and hv_floor < HOLD_FLOOR) else HOLD_FLOOR
-        nm_comp, nm_own = market.nm(live_bid, ask), market.nm(price, ask)
+        fee = review_report.order_fee(b["location"])
+        nm = lambda bid, sell: review_report.margin(bid, sell, fee)
+        nm_comp, nm_own = nm(live_bid, ask), nm(price, ask)
         sells72 = [x for x in tx if x["typeId"] == t and not x["isBuy"] and (now - x["dt"]).total_seconds() <= 72 * 3600]
         real = sum(x["total"] for x in sells72) / sum(x["quantity"] for x in sells72) if sells72 else None
         day = lambda d: now - datetime.timedelta(days=d)
         out.append(dict(
             name=name, t=t, tier=tier, price=price, rem=b["remain"], tot=b["total"], esc=esc, ask=ask, comp=comp,
-            nm_comp=nm_comp, nm_dur=market.nm(live_bid, ask_d), nm_own=nm_own, sup=market.nm(live_bid, hs["med_hi"] if hs["ask_days"] < 2 else ask),
+            nm_comp=nm_comp, nm_dur=nm(live_bid, ask_d), nm_own=nm_own, sup=nm(live_bid, hs["med_hi"] if hs["ask_days"] < 2 else ask),
             floor=floor, hv=hv, hint=verdict_hint(nm_comp, nm_own, floor),
             filled=b["total"] - b["remain"], b24=sum_qty(tx, t, True, day(1)), b72=sum_qty(tx, t, True, day(3)),
             b10=sum_qty(tx, t, True), s10=sum_qty(tx, t, False), ahead=sum(o["volume_remain"] for o in bids if o["price"] > price),

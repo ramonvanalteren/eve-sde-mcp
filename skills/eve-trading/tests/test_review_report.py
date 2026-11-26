@@ -126,6 +126,16 @@ class Report(unittest.TestCase):
         self.orders["buys"][0]["location"] = market.JITA
         self.assertIn("Buys outside Perimeter HQ", self.build()[0])
 
+    def test_a_buy_at_any_other_station_is_costed_at_the_jita_fee(self):
+        self.assertEqual(review_report.order_fee(market.PERIMETER), market.BUY_FEE)
+        for station in (market.JITA, 60000691, None):
+            self.assertEqual(review_report.order_fee(station), market.SELL_FEE)
+        self.orders["buys"][0]["location"] = 60000691
+        text, _ = self.build()
+        expected = review_report.margin(10 * M, GOOD, market.SELL_FEE)
+        self.assertIn(f"{expected:.1f}%", self.section(text, "### Hold, converting"))
+        self.assertIn("margins use Jita 4-4's broker fee", text)
+
     def test_age_comes_from_the_first_seen_date_not_the_repriced_issued(self):
         text, _ = self.build(first_seen={103: ago(30)})
         self.assertIn("`Item 3`", self.section(text, "### Kill"))

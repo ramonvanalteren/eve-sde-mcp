@@ -43,7 +43,11 @@ SLOW_RUNWAY_DAYS = 7         # "more than about a week at the observed fill pace
 EARLY_DAYS = 1.0             # "placed in roughly the last 24h" (table 5)
 MARGINAL_PCT, THIN_PCT = 15.0, 20.0   # Workflow 3: marginal is "under ~15-20%"
 INCREASE_ROWS = 5
-BROKER_FEE = {market.PERIMETER: market.BUY_FEE, market.JITA: market.SELL_FEE}
+
+
+def order_fee(location) -> float:
+    """A buy order's broker fee: Perimeter HQ's rate there, Jita 4-4's at any other station."""
+    return market.BUY_FEE if location == market.PERIMETER else market.SELL_FEE
 
 
 def margin(bid: float, ask: float, buy_fee: float = market.BUY_FEE) -> float:
@@ -99,7 +103,7 @@ def buy_rows(buys, data, tx, first_seen, names, a4e_rows, hv_floor, now, mine):
         comp = bids[0]["price"] if bids else price
         live_bid = max(price, comp)
         ask, ask_d = asks[0]["price"], market.durable_ask(asks)
-        fee = BROKER_FEE.get(o["location"], market.BUY_FEE)
+        fee = order_fee(o["location"])
         a = a4e_rows.get(t, {})
         vol3 = market.history_stats(hist, live_bid, ask)["vol3"]
         hv = bool(a) and scan_candidates.is_high_velocity(a.get("tr") or 0, vol3, len(bids), len(asks))
@@ -185,7 +189,7 @@ def kill_why(r) -> str:
         parts.append(f"under the {r['floor']:g}% floor at the competitive bid and own price")
         if r["floor"] - max(r["nm"], r["nm_own"]) < 1:
             parts.append("within a point of the floor")
-        need = max(r["price"], r["comp"]) * (1 + BROKER_FEE.get(r["location"], market.BUY_FEE)) * (1 + r["floor"] / 100) / (
+        need = max(r["price"], r["comp"]) * (1 + order_fee(r["location"])) * (1 + r["floor"] / 100) / (
             1 - market.SELL_FEE - market.SALES_TAX)
         parts.append(f"floor needs a {isk(need)} ask, live {isk(r['ask'])}")
     if stalled(r):
@@ -311,7 +315,7 @@ def render(buys, sells, wallet, now, since, params, listed_value, elsewhere, fre
     legacy = [r for r in buys if r["location"] != market.PERIMETER]
     out += ["", "## Workflow 2 — Buy portfolio",
             "All buys sit at Perimeter HQ." if not legacy else
-            "Buys outside Perimeter HQ (margins use that location's fee): " + ", ".join(code(r["name"]) for r in legacy),
+            "Buys outside Perimeter HQ (margins use Jita 4-4's broker fee): " + ", ".join(code(r["name"]) for r in legacy),
             "Live margin is at the competitive bid; the own-price figure appears when the two straddle the floor."]
     for r in buys:
         if "error" in r:
